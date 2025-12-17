@@ -1,0 +1,47 @@
+florence2_control_node:
+  ros__parameters:
+    # 输入图像话题（RealSense RGBD）
+    image_topic: "/camera/camera/color/image_raw"
+
+    # 控制信号话题：
+    #  - 期望类型: std_msgs/Int8
+    #  - 取值含义: 0 = 不处理, 1 = 处理当前最新帧
+    control_topic: "/navigation/florence"
+
+    # 模型相关配置
+    # Florence2 本地模型路径（或 HuggingFace 模型 ID）
+    model_path: "/home/ubun/xanylabeling_data/models/florence"
+
+    # 任务类型：
+    #  - caption           : 简要描述
+    #  - detailed_cap      : 详细描述
+    #  - more_detailed_cap : 更详细描述
+    task_type: "more_detailed_cap"
+
+    # 结果发布话题
+    result_topic: "/florence2/caption"
+
+    # 是否在日志中输出详细时间统计（总时间、推理时间、FPS 等）
+    show_timing: false
+
+    # 文本生成相关参数
+    max_new_tokens: 1024   # 最大生成 token 数
+    num_beams: 3           # Beam search 的 beam 数
+    do_sample: false       # 是否使用采样生成（true=采样，false=纯 beam search）
+
+    # 是否信任远程代码（HuggingFace 自定义模型代码）
+    trust_remote_code: true
+
+    # 翻译相关配置
+    # 是否将生成的英文描述翻译为中文
+    translate_to_chinese: true
+
+    # 翻译模型配置（二选一）：
+    # 方式1: 使用 HuggingFace 模型 ID（会自动下载）
+    translation_model: "Helsinki-NLP/opus-mt-en-zh"
+    
+    # 方式2: 使用本地模型路径（如果设置了此参数，将优先使用本地路径）
+    # translation_model_path: "/path/to/local/translation/model"
+    translation_model_path: "/home/ubun/xanylabeling_data/models/opus-mt-en-ch"
+
+
