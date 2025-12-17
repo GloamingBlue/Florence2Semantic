@@ -101,6 +101,14 @@ python florence/florence2_caption_ros2.py --ros2 \
 
 ## 四、测试步骤
 
+### 步骤 0: 启动Realsense ROS2节点
+
+```bash
+# 终端 0
+source /path_to_your_realsense_ros2_ws/install/setup.zsh
+ros2 launch realsense2_camera rs_launch.py
+```
+
 ### 步骤 1: 启动节点
 
 ```bash
