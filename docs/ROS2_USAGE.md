@@ -113,7 +113,7 @@ ros2 launch realsense2_camera rs_launch.py
 
 ```bash
 # 终端 1 - 使用 YAML 配置文件（推荐）
-python florence/florence2_caption_ros2.py --ros2 --ros-args --params-file florence/configs/florence2_caption_params.yaml
+python florence2_caption_ros2_lite.py --ros2 --ros-args --params-file configs/florence2_caption_params.yaml
 ```
 
 预期输出：

@@ -44,4 +44,8 @@ florence2_control_node:
     # translation_model_path: "/path/to/local/translation/model"
     translation_model_path: "/home/ubun/xanylabeling_data/models/opus-mt-en-ch"
 
+    # 图像处理相关配置
+    # 是否在语义生成前将图像旋转180度
+    flip: true
+
 

@@ -325,6 +325,7 @@ class Florence2ControlNode(Node):
         self.declare_parameter('translate_to_chinese', True)  # 是否翻译为中文
         self.declare_parameter('translation_model', 'Helsinki-NLP/opus-mt-en-zh')  # 翻译模型（HuggingFace ID）
         self.declare_parameter('translation_model_path', '')  # 翻译模型本地路径（可选）
+        self.declare_parameter('flip', False)  # 是否在语义生成前将图像旋转180度
         
         # 线程安全：最新图像存储
         self.latest_image_lock = threading.Lock()
@@ -434,6 +435,12 @@ class Florence2ControlNode(Node):
             # 1. 转换图像
             self.get_logger().info('🔄 转换图像...')
             pil_image = self._ros_image_to_pil(image_msg)
+            
+            # 1.1 根据 flip 参数决定是否翻转图像
+            flip = self.get_parameter('flip').value
+            if flip:
+                self.get_logger().info('🔄 正在将图像旋转180度...')
+                pil_image = pil_image.rotate(180)
             
             # 2. 加载模型（按需加载）
             self.get_logger().info('🔄 正在加载 Florence2 模型（按需加载）...')
