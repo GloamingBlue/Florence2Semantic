@@ -1,7 +1,16 @@
 florence2_control_node:
   ros__parameters:
-    # 输入图像话题（RealSense RGBD）
+    # 图像源配置
+    # 图像来源选择: "ros2" 或 "rtsp"
+    #  - "ros2": 从 ROS2 话题获取图像（需要订阅 image_topic）
+    #  - "rtsp": 从 RTSP 视频流获取图像（需要设置 rtsp_url）
+    image_source: "rtsp"
+
+    # 输入图像话题（RealSense RGBD，仅在 image_source="ros2" 时使用）
     image_topic: "/camera/camera/color/image_raw"
+
+    # RTSP 视频流地址（仅在 image_source="rtsp" 时使用）
+    rtsp_url: "rtsp://192.168.168.168:8554/test"
 
     # 控制信号话题：
     #  - 期望类型: std_msgs/Int8
@@ -10,7 +19,7 @@ florence2_control_node:
 
     # 模型相关配置
     # Florence2 本地模型路径（或 HuggingFace 模型 ID）
-    model_path: "/home/ubun/xanylabeling_data/models/florence"
+    model_path: "/home/ubun/robot/Florence2Semantic/models/florence"
 
     # 任务类型：
     #  - caption           : 简要描述
@@ -42,10 +51,9 @@ florence2_control_node:
     
     # 方式2: 使用本地模型路径（如果设置了此参数，将优先使用本地路径）
     # translation_model_path: "/path/to/local/translation/model"
-    translation_model_path: "/home/ubun/xanylabeling_data/models/opus-mt-en-ch"
+    translation_model_path: "/home/ubun/robot/Florence2Semantic/models/opus-mt-en-ch"
 
     # 图像处理相关配置
-    # 是否在语义生成前将图像旋转180度
-    flip: true
-
+    # 是否在语义生成前将图像旋转180度，如果使用ros2模式，则需要设置为true，如果使用rtsp模式，则需要设置为false。因为安装的realsense摄像头是倒置的，而狗自带的相机是正置的。
+    flip: false
 

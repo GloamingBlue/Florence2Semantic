@@ -1,8 +1,96 @@
 # Florence2Semantic
-This project is used for video semantic generation of the RealSense camera on the mechanical guide dog.  
-[Document](https://www.yuque.com/u57806034/mdfxam/cobhfh7nmiphlgbg)  
-[Usage](https://github.com/GloamingBlue/Florence2Semantic/blob/main/docs/ROS2_USAGE.md)  
-florence2_caption.py是语义分析功能的最小实现，适用于分析本地图像进行测试；  
-florence2_caption_ros2.py将前者集成到ros2中，实时监测视频流接收控制信号进行语义分析，并且增加了翻译功能，支持性能监测；  
-florence2_caption_ros2_lite.py将前者的性能监测功能去掉，只保留项目需要的部分；  
-configs/florence2_caption_params.yaml是前两者的配置文件，并且兼容命令行参数配置。  
+
+This project is used for video semantic generation of the RealSense camera on the mechanical guide dog.
+
+## 文档
+
+- [详细文档](https://www.yuque.com/u57806034/mdfxam/cobhfh7nmiphlgbg)
+- [ROS2 使用说明](https://github.com/GloamingBlue/Florence2Semantic/blob/main/docs/ROS2_USAGE.md)
+
+## 文件说明
+
+### 核心脚本
+
+- **`florence2_caption.py`**: 语义分析功能的最小实现，适用于分析本地图像进行测试
+- **`florence2_caption_ros2.py`**: 将前者集成到 ROS2 中，实时监测视频流接收控制信号进行语义分析，支持：
+  - ROS2 话题模式：从 ROS2 话题订阅图像
+  - RTSP 流模式：从 RTSP 视频流获取图像
+  - 翻译功能：将英文描述翻译为中文
+  - 性能监测：显示详细的推理时间统计
+- **`florence2_caption_ros2_lite.py`**: 精简版，移除了性能监测功能，只保留核心语义生成功能
+
+### 配置文件
+
+- **`configs/florence2_caption_params.yaml`**: ROS2 节点的配置文件，支持：
+  - 图像源选择（ROS2 话题或 RTSP 流）
+  - 模型参数配置
+  - 翻译功能配置
+  - 兼容命令行参数覆盖
+
+## 主要功能
+
+### 图像源支持
+
+1. **ROS2 话题模式**（默认）
+   - 从 ROS2 话题订阅图像消息
+   - 适用于 RealSense 相机等 ROS2 设备
+
+2. **RTSP 流模式**
+   - 从 RTSP 视频流获取图像
+   - 支持网络视频流
+   - 自动重连机制
+   - 不需要启动相机 ROS2 节点
+
+### 任务类型
+
+- `caption`: 基础图像描述
+- `detailed_cap`: 详细图像描述
+- `more_detailed_cap`: 更详细的图像描述
+
+### 其他特性
+
+- 按需加载模型，节省内存
+- 支持中英文翻译
+- 支持 GPU 加速
+- 线程安全的图像处理
+- 详细的错误处理和日志
+
+## 快速开始
+
+### ROS2 话题模式
+
+```bash
+# 1. 启动相机节点
+source /path_to_your_realsense_ros2_ws/install/setup.zsh
+ros2 launch realsense2_camera rs_launch.py
+
+# 2. 启动语义分析节点
+python florence2_caption_ros2_lite.py --ros2 --ros-args --params-file configs/florence2_caption_params.yaml
+
+# 3. 发送控制信号
+ros2 topic pub -1 /navigation/florence std_msgs/Int8 "data: 1"
+
+# 4. 查看结果
+ros2 topic echo -f /florence2/caption
+```
+
+### RTSP 流模式
+
+```yaml
+# 在 configs/florence2_caption_params.yaml 中设置
+image_source: "rtsp"
+rtsp_url: "rtsp://192.168.168.168:8554/test"
+```
+
+```bash
+# 1. 启动语义分析节点（不需要启动相机节点）
+python florence2_caption_ros2_lite.py --ros2 --ros-args --params-file configs/florence2_caption_params.yaml
+
+# 2. 发送控制信号
+ros2 topic pub -1 /navigation/florence std_msgs/Int8 "data: 1"
+
+# 3. 查看结果
+ros2 topic echo -f /florence2/caption
+```
+
+详细使用说明请参考 [ROS2_USAGE.md](docs/ROS2_USAGE.md)。  

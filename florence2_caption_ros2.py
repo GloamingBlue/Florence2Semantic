@@ -491,7 +491,9 @@ class Florence2ControlNode(Node):
         super().__init__('florence2_control_node')
         
         # 参数声明
-        self.declare_parameter('image_topic', '/camera/camera/color/image_raw')
+        self.declare_parameter('image_source', 'ros2')  # 图像来源: "ros2" 或 "rtsp"
+        self.declare_parameter('image_topic', '/camera/camera/color/image_raw')  # ROS2 图像话题
+        self.declare_parameter('rtsp_url', 'rtsp://192.168.168.168:8554/test')  # RTSP 流地址
         self.declare_parameter('control_topic', '/navigation/florence')
         self.declare_parameter('model_path', '/home/ubun/xanylabeling_data/models/florence')
         self.declare_parameter('task_type', 'more_detailed_cap')
@@ -506,26 +508,43 @@ class Florence2ControlNode(Node):
         self.declare_parameter('translation_model_path', '/home/ubun/xanylabeling_data/models/opus-mt-en-ch')  # 翻译模型本地路径（可选）
         self.declare_parameter('flip', False)  # 是否在语义生成前将图像旋转180度
         
+        # 获取图像源类型
+        image_source = self.get_parameter('image_source').value
+        
         # 线程安全：最新图像存储
         self.latest_image_lock = threading.Lock()
-        self.latest_image_msg = None
+        self.latest_image_msg = None  # ROS2 图像消息
+        self.latest_rtsp_frame = None  # RTSP 帧（numpy array）
         
         # 处理状态标志（避免重复处理）
         self.is_processing = False
         self.processing_lock = threading.Lock()
         
+        # RTSP 相关
+        self.rtsp_cap = None
+        self.rtsp_thread = None
+        self.rtsp_running = False
+        
         # 初始化 cv_bridge（用于图像转换）
         self.cv_bridge = CvBridge()
         
-        # 创建图像订阅者（持续接收，保存最新帧）
-        image_topic = self.get_parameter('image_topic').value
-        self.image_subscription = self.create_subscription(
-            ROSImage,
-            image_topic,
-            self.image_callback,
-            1  # QoS depth = 1，只保留最新图像
-        )
-        self.get_logger().info(f'📷 已订阅图像话题: {image_topic}')
+        # 根据图像源类型初始化
+        if image_source == 'ros2':
+            # ROS2 模式：创建图像订阅者
+            image_topic = self.get_parameter('image_topic').value
+            self.image_subscription = self.create_subscription(
+                ROSImage,
+                image_topic,
+                self.image_callback,
+                1  # QoS depth = 1，只保留最新图像
+            )
+            self.get_logger().info(f'📷 已订阅图像话题: {image_topic}')
+        elif image_source == 'rtsp':
+            # RTSP 模式：启动 RTSP 流读取线程
+            rtsp_url = self.get_parameter('rtsp_url').value
+            self._start_rtsp_stream(rtsp_url)
+        else:
+            raise ValueError(f'不支持的图像源类型: {image_source}，支持的类型: "ros2", "rtsp"')
         
         # 创建控制信号订阅者
         control_topic = self.get_parameter('control_topic').value
@@ -551,11 +570,100 @@ class Florence2ControlNode(Node):
     
     def image_callback(self, msg: ROSImage):
         """
-        图像话题回调函数 - 持续接收，保存最新一帧
+        图像话题回调函数 - 持续接收，保存最新一帧（ROS2 模式）
         """
         with self.latest_image_lock:
             self.latest_image_msg = msg
         # 不立即处理，等待控制信号
+    
+    def _start_rtsp_stream(self, rtsp_url: str):
+        """
+        启动 RTSP 流读取线程
+        
+        Args:
+            rtsp_url: RTSP 流地址
+        """
+        self.get_logger().info(f'🔄 正在连接 RTSP 流: {rtsp_url}')
+        
+        # 创建 VideoCapture 对象
+        self.rtsp_cap = cv2.VideoCapture(rtsp_url)
+        
+        if not self.rtsp_cap.isOpened():
+            self.get_logger().error(f'❌ 无法打开 RTSP 流: {rtsp_url}')
+            raise RuntimeError(f'无法打开 RTSP 流: {rtsp_url}')
+        
+        # 设置缓冲区大小（减少延迟）
+        self.rtsp_cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        
+        # 尝试读取第一帧，验证连接是否正常
+        self.get_logger().info('🔄 正在验证 RTSP 流连接...')
+        ret, test_frame = self.rtsp_cap.read()
+        if not ret or test_frame is None:
+            self.rtsp_cap.release()
+            self.get_logger().error(f'❌ RTSP 流连接验证失败，无法读取第一帧: {rtsp_url}')
+            raise RuntimeError(f'RTSP 流连接验证失败: {rtsp_url}')
+        
+        self.get_logger().info(f'✅ RTSP 流连接验证成功，已读取第一帧 (尺寸: {test_frame.shape})')
+        
+        self.rtsp_running = True
+        
+        # 启动读取线程
+        self.rtsp_thread = threading.Thread(target=self._rtsp_read_loop, daemon=True)
+        self.rtsp_thread.start()
+        
+        # 等待一小段时间，确保线程已启动并开始读取
+        time.sleep(0.5)
+        
+        self.get_logger().info(f'✅ RTSP 流读取线程已启动: {rtsp_url}')
+    
+    def _rtsp_read_loop(self):
+        """
+        RTSP 流读取循环（在独立线程中运行）
+        """
+        frame_count = 0
+        consecutive_failures = 0
+        max_failures = 5
+        
+        while self.rtsp_running:
+            ret, frame = self.rtsp_cap.read()
+            if ret:
+                # 转换为 RGB 格式
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                with self.latest_image_lock:
+                    self.latest_rtsp_frame = frame_rgb
+                
+                frame_count += 1
+                consecutive_failures = 0
+                
+                # 每100帧输出一次状态（避免日志过多）
+                if frame_count % 100 == 0:
+                    self.get_logger().debug(f'📹 RTSP 流正常，已读取 {frame_count} 帧')
+            else:
+                consecutive_failures += 1
+                self.get_logger().warn(f'⚠️  RTSP 流读取失败 (连续失败 {consecutive_failures} 次)，尝试重新连接...')
+                
+                # 如果连续失败次数过多，尝试重新连接
+                if consecutive_failures >= max_failures:
+                    # 尝试重新连接
+                    self.rtsp_cap.release()
+                    time.sleep(2)  # 等待更长时间再重连
+                    rtsp_url = self.get_parameter('rtsp_url').value
+                    self.get_logger().info(f'🔄 正在重新连接 RTSP 流: {rtsp_url}')
+                    self.rtsp_cap = cv2.VideoCapture(rtsp_url)
+                    if not self.rtsp_cap.isOpened():
+                        self.get_logger().error(f'❌ RTSP 流重连失败: {rtsp_url}')
+                        # 清空当前帧
+                        with self.latest_image_lock:
+                            self.latest_rtsp_frame = None
+                        break
+                    self.rtsp_cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                    consecutive_failures = 0
+                    self.get_logger().info('✅ RTSP 流重连成功')
+        
+        # 清理资源
+        if self.rtsp_cap is not None:
+            self.rtsp_cap.release()
+            self.get_logger().info('🔄 RTSP 流已关闭')
     
     def control_callback(self, msg: Int8):
         """
@@ -581,15 +689,46 @@ class Florence2ControlNode(Node):
                 self.is_processing = True
             
             try:
-                # 获取最新图像
-                with self.latest_image_lock:
-                    if self.latest_image_msg is None:
-                        self.get_logger().warn('⚠️  尚未收到图像，无法处理')
-                        return
-                    image_msg = self.latest_image_msg
+                # 获取最新图像（根据图像源类型）
+                image_source = self.get_parameter('image_source').value
                 
-                # 按需加载模型并处理
-                self._process_with_model(image_msg)
+                if image_source == 'ros2':
+                    # ROS2 模式：从话题获取图像
+                    with self.latest_image_lock:
+                        if self.latest_image_msg is None:
+                            self.get_logger().warn('⚠️  尚未收到图像，无法处理')
+                            return
+                        image_msg = self.latest_image_msg
+                    self._process_with_model(image_msg)
+                elif image_source == 'rtsp':
+                    # RTSP 模式：从 RTSP 流获取图像
+                    # 等待一小段时间，确保 RTSP 流已经读取到帧
+                    max_wait_time = 3.0  # 最多等待3秒
+                    wait_interval = 0.1  # 每次检查间隔0.1秒
+                    waited_time = 0.0
+                    
+                    while waited_time < max_wait_time:
+                        with self.latest_image_lock:
+                            if self.latest_rtsp_frame is not None:
+                                frame = self.latest_rtsp_frame.copy()
+                                break
+                        time.sleep(wait_interval)
+                        waited_time += wait_interval
+                    else:
+                        # 超时仍未收到帧
+                        self.get_logger().warn(f'⚠️  等待 {max_wait_time} 秒后仍未收到 RTSP 帧，无法处理')
+                        self.get_logger().warn('💡 提示：请检查 RTSP 流地址是否正确，以及网络连接是否正常')
+                        # 检查 RTSP 流状态
+                        if self.rtsp_cap is None or not self.rtsp_cap.isOpened():
+                            self.get_logger().error('❌ RTSP 流连接已断开')
+                        if not self.rtsp_running:
+                            self.get_logger().error('❌ RTSP 读取线程已停止')
+                        return
+                    
+                    self._process_with_rtsp_frame(frame)
+                else:
+                    self.get_logger().error(f'❌ 不支持的图像源类型: {image_source}')
+                    return
                 
             except Exception as e:
                 self.get_logger().error(f'❌ 处理图像时出错: {e}')
@@ -603,17 +742,37 @@ class Florence2ControlNode(Node):
     
     def _process_with_model(self, image_msg: ROSImage):
         """
-        按需加载模型，处理图像，然后释放资源
+        按需加载模型，处理 ROS2 图像消息，然后释放资源
         
         Args:
             image_msg: ROS2 Image 消息
         """
+        # 1. 转换图像
+        self.get_logger().info('🔄 转换图像...')
+        pil_image = self._ros_image_to_pil(image_msg)
+        self._process_image(pil_image)
+    
+    def _process_with_rtsp_frame(self, frame: np.ndarray):
+        """
+        按需加载模型，处理 RTSP 帧，然后释放资源
+        
+        Args:
+            frame: RTSP 帧（RGB numpy array）
+        """
+        # 1. 转换图像
+        self.get_logger().info('🔄 转换图像...')
+        pil_image = Image.fromarray(frame)
+        self._process_image(pil_image)
+    
+    def _process_image(self, pil_image: Image.Image):
+        """
+        处理图像（通用方法，支持 ROS2 和 RTSP）
+        
+        Args:
+            pil_image: PIL Image 对象
+        """
         caption_generator = None
         try:
-            # 1. 转换图像
-            self.get_logger().info('🔄 转换图像...')
-            pil_image = self._ros_image_to_pil(image_msg)
-            
             # 1.1 根据 flip 参数决定是否翻转图像
             flip = self.get_parameter('flip').value
             if flip:
@@ -738,6 +897,20 @@ class Florence2ControlNode(Node):
             
         except Exception as e:
             self.get_logger().warn(f'⚠️  清理资源时出错: {e}')
+    
+    def destroy_node(self):
+        """
+        节点销毁时清理资源
+        """
+        # 停止 RTSP 流读取
+        if self.rtsp_running:
+            self.rtsp_running = False
+            if self.rtsp_thread is not None:
+                self.rtsp_thread.join(timeout=2.0)
+            if self.rtsp_cap is not None:
+                self.rtsp_cap.release()
+        
+        super().destroy_node()
 
 
 def main():

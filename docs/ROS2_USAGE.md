@@ -77,11 +77,38 @@ python florence/florence2_caption_ros2.py --ros2 \
 
 注意：命令行参数会覆盖 YAML 文件中的配置。
 
-## 三、ROS2 话题
+## 三、图像源配置
+
+节点支持两种图像获取方式：
+
+### 3.1 ROS2 话题模式（默认）
+
+从 ROS2 话题订阅图像消息。
+
+**配置参数**：
+- `image_source`: `"ros2"`（默认）
+- `image_topic`: 图像话题名称（默认: `/camera/camera/color/image_raw`）
+
+### 3.2 RTSP 流模式
+
+从 RTSP 视频流获取图像。
+
+**配置参数**：
+- `image_source`: `"rtsp"`
+- `rtsp_url`: RTSP 流地址（默认: `rtsp://192.168.168.168:8554/test`）
+
+**特点**：
+- 不需要启动相机 ROS2 节点
+- 支持网络视频流
+- 自动重连机制
+- 在独立线程中读取，不阻塞主线程
+
+## 四、ROS2 话题
 
 ### 订阅话题
 
-1. **图像话题** (默认: `/camera/camera/color/image_raw`)
+1. **图像话题** (仅在 `image_source="ros2"` 时使用)
+   - 默认: `/camera/camera/color/image_raw`
    - 类型: `sensor_msgs/Image`
    - 用途: 持续接收图像流，保存最新一帧
    - 可在 YAML 配置文件中修改
@@ -99,9 +126,11 @@ python florence/florence2_caption_ros2.py --ros2 \
    - 内容: 生成的图像描述文本
    - 可在 YAML 配置文件中修改
 
-## 四、测试步骤
+## 五、测试步骤
 
-### 步骤 0: 启动Realsense ROS2节点
+### 方式 A: ROS2 话题模式
+
+#### 步骤 0: 启动 RealSense ROS2 节点
 
 ```bash
 # 终端 0
@@ -109,104 +138,209 @@ source /path_to_your_realsense_ros2_ws/install/setup.zsh
 ros2 launch realsense2_camera rs_launch.py
 ```
 
-### 步骤 1: 启动节点
+#### 步骤 1: 配置并启动节点
 
+确保配置文件中 `image_source: "ros2"`：
+
+```yaml
+florence2_control_node:
+  ros__parameters:
+    image_source: "ros2"
+    image_topic: "/camera/camera/color/image_raw"
+    # ... 其他参数
+```
+
+启动节点：
 ```bash
-# 终端 1 - 使用 YAML 配置文件（推荐）
-python florence2_caption_ros2_lite.py --ros2 --ros-args --params-file configs/florence2_caption_params.yaml
+# 终端 1
+python florence2_caption_ros2.py --ros2 --ros-args --params-file configs/florence2_caption_params.yaml
 ```
 
 预期输出：
 ```
-🔄 正在初始化 Florence2 模型...
-✅ 模型加载完成
 📷 已订阅图像话题: /camera/camera/color/image_raw
 🎮 已订阅控制信号话题: /navigation/florence
 📤 已创建结果发布话题: /florence2/caption
-✅ Florence2 Caption Node 初始化完成
+✅ Florence2 Caption Node 初始化完成（模型未加载）
 ⏳ 等待控制信号...
 ```
 
-### 步骤 2: 发送控制信号（触发处理）
+### 方式 B: RTSP 流模式
+
+#### 步骤 0: 确保 RTSP 流可用
+
+```bash
+# 测试 RTSP 流是否可访问（可选）
+ffplay rtsp://192.168.168.168:8554/test
+# 或
+vlc rtsp://192.168.168.168:8554/test
+```
+
+#### 步骤 1: 配置并启动节点
+
+确保配置文件中 `image_source: "rtsp"`：
+
+```yaml
+florence2_control_node:
+  ros__parameters:
+    image_source: "rtsp"
+    rtsp_url: "rtsp://192.168.168.168:8554/test"
+    # ... 其他参数
+```
+
+启动节点：
+```bash
+# 终端 1
+python florence2_caption_ros2.py --ros2 --ros-args --params-file configs/florence2_caption_params.yaml
+```
+
+预期输出：
+```
+🔄 正在连接 RTSP 流: rtsp://192.168.168.168:8554/test
+🔄 正在验证 RTSP 流连接...
+✅ RTSP 流连接验证成功，已读取第一帧 (尺寸: (480, 640, 3))
+✅ RTSP 流读取线程已启动: rtsp://192.168.168.168:8554/test
+🎮 已订阅控制信号话题: /navigation/florence
+📤 已创建结果发布话题: /florence2/caption
+✅ Florence2 Caption Node 初始化完成（模型未加载）
+⏳ 等待控制信号...
+```
+
+**注意**：RTSP 模式不需要启动相机 ROS2 节点。
+
+#### 步骤 2: 发送控制信号（触发处理）
 
 ```bash
 # 终端 2
 ros2 topic pub -1 /navigation/florence std_msgs/Int8 "data: 1"
 ```
 
-### 步骤 3: 查看结果
+#### 步骤 3: 查看结果
 
 ```bash
 # 终端 3
 ros2 topic echo -f /florence2/caption
 ```
 
-### 步骤 4: 查看节点日志
+#### 步骤 4: 查看节点日志
 
 节点会在终端 1 输出处理日志：
+
+**ROS2 话题模式**：
 ```
 收到控制信号 1: 开始处理图像...
+🔄 转换图像...
+🔄 正在加载 Florence2 模型（按需加载）...
 ✅ 生成描述: A person is standing in front of a building...
 📤 已发布描述结果
 ```
 
-## 五、配置参数
+**RTSP 流模式**：
+```
+收到控制信号 1: 开始处理图像...
+🔄 转换图像...
+🔄 正在加载 Florence2 模型（按需加载）...
+✅ 生成描述: A person is standing in front of a building...
+📤 已发布描述结果
+```
 
-### 5.1 配置文件方式（推荐）
+## 六、配置参数
+
+### 6.1 配置文件方式（推荐）
 
 所有参数都可以通过 YAML 配置文件 `florence2_caption_params.yaml` 进行配置：
 
+**ROS2 话题模式配置示例**：
 ```yaml
-florence2_caption_node:
+florence2_control_node:
   ros__parameters:
+    # 图像源配置
+    image_source: "ros2"
     image_topic: "/camera/camera/color/image_raw"
+    
+    # 控制信号话题
     control_topic: "/navigation/florence"
+    
+    # 模型相关配置
     model_path: "/home/ubun/xanylabeling_data/models/florence"
     task_type: "more_detailed_cap"
+    
+    # 结果发布话题
     result_topic: "/florence2/caption"
-    show_timing: false
-    max_new_tokens: 1024
-    num_beams: 3
-    do_sample: false
-    trust_remote_code: true
+    
+    # 其他参数...
+```
+
+**RTSP 流模式配置示例**：
+```yaml
+florence2_control_node:
+  ros__parameters:
+    # 图像源配置
+    image_source: "rtsp"
+    rtsp_url: "rtsp://192.168.168.168:8554/test"
+    
+    # 控制信号话题
+    control_topic: "/navigation/florence"
+    
+    # 模型相关配置
+    model_path: "/home/ubun/xanylabeling_data/models/florence"
+    task_type: "more_detailed_cap"
+    
+    # 结果发布话题
+    result_topic: "/florence2/caption"
+    
+    # 其他参数...
 ```
 
 使用配置文件启动：
 ```bash
-python florence/florence2_caption_ros2.py --ros2 \
-    --ros-args --params-file florence/florence2_caption_params.yaml
+python florence2_caption_ros2.py --ros2 \
+    --ros-args --params-file configs/florence2_caption_params.yaml
 ```
 
-### 5.2 参数说明
+### 6.2 参数说明
 
 | 参数名 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
-| `image_topic` | string | `/camera/camera/color/image_raw` | 图像流话题 |
+| **图像源配置** |
+| `image_source` | string | `"ros2"` | 图像来源: `"ros2"` 或 `"rtsp"` |
+| `image_topic` | string | `/camera/camera/color/image_raw` | ROS2 图像话题（仅在 `image_source="ros2"` 时使用） |
+| `rtsp_url` | string | `rtsp://192.168.168.168:8554/test` | RTSP 流地址（仅在 `image_source="rtsp"` 时使用） |
+| **控制与结果** |
 | `control_topic` | string | `/navigation/florence` | 控制信号话题 |
-| `model_path` | string | `/home/ubun/xanylabeling_data/models/florence` | 模型路径 |
-| `task_type` | string | `more_detailed_cap` | 任务类型: caption, detailed_cap, more_detailed_cap |
 | `result_topic` | string | `/florence2/caption` | 结果发布话题 |
-| `show_timing` | bool | `false` | 是否在日志中显示时间统计 |
+| **模型配置** |
+| `model_path` | string | `/home/ubun/.../florence` | 模型路径 |
+| `task_type` | string | `more_detailed_cap` | 任务类型: `caption`, `detailed_cap`, `more_detailed_cap` |
 | `max_new_tokens` | int | `1024` | 最大生成 token 数 |
 | `num_beams` | int | `3` | Beam search 的 beam 数量 |
 | `do_sample` | bool | `false` | 是否使用采样生成 |
 | `trust_remote_code` | bool | `true` | 是否信任远程代码 |
+| **翻译配置** |
+| `translate_to_chinese` | bool | `false` | 是否将生成的英文描述翻译为中文 |
+| `translation_model` | string | `Helsinki-NLP/opus-mt-en-zh` | 翻译模型（HuggingFace ID） |
+| `translation_model_path` | string | `""` | 翻译模型本地路径（可选） |
+| **其他配置** |
+| `show_timing` | bool | `true` | 是否在日志中显示时间统计 |
+| `flip` | bool | `false` | 是否在语义生成前将图像旋转180度 |
 
-### 5.3 命令行参数覆盖
+### 6.3 命令行参数覆盖
 
 如果需要临时修改某些参数，可以在命令行中覆盖：
 
 ```bash
-python florence/florence2_caption_ros2.py --ros2 \
+python florence2_caption_ros2.py --ros2 \
     --ros-args \
-    --params-file florence/florence2_caption_params.yaml \
+    --params-file configs/florence2_caption_params.yaml \
+    -p image_source:=rtsp \
+    -p rtsp_url:=rtsp://192.168.1.100:8554/stream \
     -p task_type:=caption \
     -p show_timing:=true
 ```
 
 命令行参数会覆盖 YAML 文件中的配置。
 
-## 六、常见问题
+## 七、常见问题
 
 ### 问题 1: ROS2 不可用
 
@@ -229,7 +363,7 @@ sudo apt-get install ros-<distro>-cv-bridge
 # 或从源码编译
 ```
 
-### 问题 3: 没有收到图像
+### 问题 3: 没有收到图像（ROS2 模式）
 
 **现象**: 发送控制信号后，节点提示"尚未收到图像"
 
@@ -237,6 +371,19 @@ sudo apt-get install ros-<distro>-cv-bridge
 - 检查图像话题是否正确: `ros2 topic list`
 - 检查图像话题是否有数据: `ros2 topic echo /camera/color/image_raw`
 - 确认 RealSense 相机节点正在运行
+- 确认配置文件中 `image_source: "ros2"`
+
+### 问题 3b: 没有收到 RTSP 帧
+
+**现象**: 发送控制信号后，节点提示"尚未收到 RTSP 帧"
+
+**解决**:
+- 检查 RTSP 流地址是否正确: `rtsp://192.168.168.168:8554/test`
+- 测试 RTSP 流是否可访问: `ffplay rtsp://192.168.168.168:8554/test`
+- 检查网络连接: `ping 192.168.168.168`
+- 确认配置文件中 `image_source: "rtsp"`
+- 查看节点启动日志，确认 RTSP 流连接是否成功
+- 等待几秒让 RTSP 流稳定后再发送控制信号
 
 ### 问题 4: 处理速度慢
 
@@ -247,7 +394,7 @@ sudo apt-get install ros-<distro>-cv-bridge
 - 降低 `max_new_tokens` 参数
 - 使用 `caption` 而不是 `more_detailed_cap`
 
-## 七、与导航系统集成
+## 八、与导航系统集成
 
 ### 发送控制信号
 
@@ -299,14 +446,14 @@ class NavigationNode(Node):
         # 处理描述结果...
 ```
 
-## 八、性能优化建议
+## 九、性能优化建议
 
 1. **使用 GPU**: 确保 CUDA 可用，模型会自动使用 GPU
 2. **调整任务类型**: `caption` 比 `more_detailed_cap` 快
 3. **调整生成参数**: 降低 `max_new_tokens` 和 `num_beams`
 4. **避免频繁触发**: 控制信号发送频率不要过高
 
-## 九、日志级别
+## 十、日志级别
 
 节点使用 ROS2 日志系统，可以通过环境变量控制日志级别：
 
