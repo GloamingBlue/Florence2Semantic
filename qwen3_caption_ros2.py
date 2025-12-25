@@ -43,9 +43,9 @@ class Qwen3VLCaption:
 
     # 任务类型对应的提示词模板
     PROMPT_TEMPLATES = {
-        "caption": "用一段话简要描述场景以及场景中的物体在场景中的位置，不要出现markdown格式",
-        "detailed_cap": "Provide a detailed description of this image, including objects, scenes, colors, and any notable features.",
-        "more_detailed_cap": "Provide an extremely detailed description of this image. Include all visible objects, their positions, colors, textures, the scene context, lighting conditions, and any other relevant details.",
+        "caption": "直接描述场景内容，包括场景中的物体及其位置关系。要求：1) 使用纯文本，不要使用markdown格式、分隔符、换行符等特殊字符；2) 不要使用'照片'、'图片'、'画面'、'这张'等词汇，直接描述场景本身；3) 用一段连贯的文字描述，不要分段",
+        "detailed_cap": "直接详细描述场景内容，包括所有可见的物体、它们的位置、颜色、纹理、场景上下文和光照条件。要求：1) 使用纯文本，不要使用markdown格式、分隔符、换行符等特殊字符；2) 不要使用'照片'、'图片'、'画面'、'这张'等词汇，直接描述场景本身；3) 用一段连贯的文字描述，不要分段",
+        "more_detailed_cap": "直接非常详细地描述场景内容，包括所有可见的物体、它们的位置、颜色、纹理、场景上下文、光照条件和其他相关细节。要求：1) 使用纯文本，不要使用markdown格式、分隔符、换行符等特殊字符；2) 不要使用'照片'、'图片'、'画面'、'这张'等词汇，直接描述场景本身；3) 用一段连贯的文字描述，不要分段",
     }
 
     def __init__(
