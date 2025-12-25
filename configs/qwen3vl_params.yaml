@@ -1,0 +1,46 @@
+qwen3vl_control_node:
+  ros__parameters:
+    # 图像源配置
+    # 图像来源选择: "ros2" 或 "rtsp"
+    #  - "ros2": 从 ROS2 话题获取图像（需要订阅 image_topic）
+    #  - "rtsp": 从 RTSP 视频流获取图像（需要设置 rtsp_url）
+    image_source: "ros2"
+
+    # 输入图像话题（RealSense RGBD，仅在 image_source="ros2" 时使用）
+    image_topic: "/camera/camera/color/image_raw"
+
+    # RTSP 视频流地址（仅在 image_source="rtsp" 时使用）
+    rtsp_url: "rtsp://192.168.168.168:8554/test"
+
+    # 控制信号话题：
+    #  - 期望类型: std_msgs/Int8
+    #  - 取值含义: 0 = 不处理, 1 = 处理当前最新帧
+    control_topic: "/navigation/florence"
+
+    # 模型相关配置
+    # Qwen3-VL 模型路径（本地路径或 HuggingFace 模型 ID）
+    # 例如: "Qwen/Qwen3-VL-2B-Instruct" 或 "/path/to/local/model"
+    model_path: "/home/ubun/robot/Florence2Semantic/models/qwen3-vl-2B-Instruct"
+
+    # 任务类型：
+    #  - caption           : 简要描述
+    #  - detailed_cap      : 详细描述
+    #  - more_detailed_cap : 更详细描述
+    task_type: "caption"
+
+    # 结果发布话题
+    result_topic: "/florence2/caption"
+
+    # 文本生成相关参数
+    max_new_tokens: 1024   # 最大生成 token 数
+    temperature: 0.7       # 采样温度（0.0-1.0，值越大越随机）
+    top_p: 0.8            # Nucleus sampling 参数（0.0-1.0）
+    do_sample: true       # 是否使用采样生成（true=采样，false=贪婪解码）
+
+    # 模型加载相关参数
+    trust_remote_code: true  # 是否信任远程代码（HuggingFace 自定义模型代码）
+
+    # 图像处理相关配置
+    # 是否在语义生成前将图像旋转180度，如果使用ros2模式，则需要设置为true，如果使用rtsp模式，则需要设置为false。因为安装的realsense摄像头是倒置的，而狗自带的相机是正置的。
+    flip: false
+

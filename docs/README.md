@@ -66,6 +66,8 @@ ros2 launch realsense2_camera rs_launch.py
 
 # 2. 启动语义分析节点
 python florence2_caption_ros2_lite.py --ros2 --ros-args --params-file configs/florence2_caption_params.yaml
+或
+python qwen3_caption_ros2.py --ros2 --ros-args --params-file configs/qwen3vl_params.yaml
 
 # 3. 发送控制信号
 ros2 topic pub -1 /navigation/florence std_msgs/Int8 "data: 1"
@@ -85,6 +87,8 @@ rtsp_url: "rtsp://192.168.168.168:8554/test"
 ```bash
 # 1. 启动语义分析节点（不需要启动相机节点）
 python florence2_caption_ros2_lite.py --ros2 --ros-args --params-file configs/florence2_caption_params.yaml
+或
+python qwen3_caption_ros2.py --ros2 --ros-args --params-file configs/qwen3vl_params.yaml
 
 # 2. 发送控制信号
 ros2 topic pub -1 /navigation/florence std_msgs/Int8 "data: 1"
