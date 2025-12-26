@@ -12,10 +12,16 @@ qwen3vl_control_node:
     # RTSP 视频流地址（仅在 image_source="rtsp" 时使用）
     rtsp_url: "rtsp://192.168.168.168:8554/test"
 
-    # 控制信号话题：
-    #  - 期望类型: std_msgs/Int8
-    #  - 取值含义: 0 = 不处理, 1 = 处理当前最新帧
-    control_topic: "/navigation/florence"
+    # 控制信号话题（支持两个话题，任一话题收到触发信号即可触发）：
+    #  - control_topic: std_msgs/msg/String，取值为"操场"时，开始场景解析
+    #  - control_topic_2: std_msgs/msg/Int8，取值为1时，开始场景解析
+    control_topic: "/nav/arrival"             # 控制信号话题 1 (String类型，触发词: "操场")
+    control_topic_2: "/navigation/florence"   # 控制信号话题 2 (Int8类型，期望值: 1，可选，如果与话题1相同则忽略)
+
+    # 发送准备接受结果的话题
+    #  - 期望类型: std_msgs/msg/Bool
+    #  - 取值为true时，表示准备接受结果
+    ready_topic: "/speech/ready"
 
     # 模型相关配置
     # Qwen3-VL 模型路径（本地路径或 HuggingFace 模型 ID）

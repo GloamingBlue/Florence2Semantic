@@ -31,7 +31,7 @@ except ImportError as e:
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image as ROSImage
-from std_msgs.msg import Int8, String
+from std_msgs.msg import Int8, String, Bool
 
 # 导入 cv_bridge 和 OpenCV，用于图像转换
 from cv_bridge import CvBridge
@@ -43,9 +43,9 @@ class Qwen3VLCaption:
 
     # 任务类型对应的提示词模板
     PROMPT_TEMPLATES = {
-        "caption": "直接描述场景内容，包括场景中的物体及其位置关系。要求：1) 使用纯文本，不要使用markdown格式、分隔符、换行符等特殊字符；2) 不要使用'照片'、'图片'、'画面'、'这张'等词汇，直接描述场景本身；3) 用一段连贯的文字描述，不要分段",
-        "detailed_cap": "直接详细描述场景内容，包括所有可见的物体、它们的位置、颜色、纹理、场景上下文和光照条件。要求：1) 使用纯文本，不要使用markdown格式、分隔符、换行符等特殊字符；2) 不要使用'照片'、'图片'、'画面'、'这张'等词汇，直接描述场景本身；3) 用一段连贯的文字描述，不要分段",
-        "more_detailed_cap": "直接非常详细地描述场景内容，包括所有可见的物体、它们的位置、颜色、纹理、场景上下文、光照条件和其他相关细节。要求：1) 使用纯文本，不要使用markdown格式、分隔符、换行符等特殊字符；2) 不要使用'照片'、'图片'、'画面'、'这张'等词汇，直接描述场景本身；3) 用一段连贯的文字描述，不要分段",
+        "caption": "直接描述场景内容，包括场景中的物体及其位置关系。要求：1) 使用纯文本，不要使用markdown格式、分隔符、换行符等特殊字符；2) 不要使用'照片'、'图片'、'画面'、'这张'等词汇，直接描述场景本身；3) 用一段连贯的文字描述，不要分段；4) 每个物体或特征只描述一次，不要重复描述相同的内容；5) 避免循环重复，描述要简洁完整",
+        "detailed_cap": "直接详细描述场景内容，包括所有可见的物体、它们的位置、颜色、纹理、场景上下文和光照条件。要求：1) 使用纯文本，不要使用markdown格式、分隔符、换行符等特殊字符；2) 不要使用'照片'、'图片'、'画面'、'这张'等词汇，直接描述场景本身；3) 用一段连贯的文字描述，不要分段；4) 每个物体或特征只描述一次，不要重复描述相同的内容；5) 避免循环重复，描述要简洁完整；6) 如果多个位置有相同类型的物体，可以统一描述，不要逐个重复",
+        "more_detailed_cap": "直接非常详细地描述场景内容，包括所有可见的物体、它们的位置、颜色、纹理、场景上下文、光照条件和其他相关细节。要求：1) 使用纯文本，不要使用markdown格式、分隔符、换行符等特殊字符；2) 不要使用'照片'、'图片'、'画面'、'这张'等词汇，直接描述场景本身；3) 用一段连贯的文字描述，不要分段；4) 每个物体或特征只描述一次，不要重复描述相同的内容；5) 避免循环重复，描述要简洁完整；6) 如果多个位置有相同类型的物体，可以统一描述，不要逐个重复；7) 保持描述的多样性和连贯性，避免使用相同的句式重复描述",
     }
 
     def __init__(
@@ -186,6 +186,7 @@ class Qwen3VLCaption:
                 do_sample=self.do_sample,
                 temperature=self.temperature if self.do_sample else None,
                 top_p=self.top_p if self.do_sample else None,
+                repetition_penalty=1.3,  # 添加重复惩罚，减少重复生成（值越大，惩罚越强）
             )
 
         # 截取新生成的部分（根据官方文档）
@@ -232,7 +233,9 @@ class Qwen3VLControlNode(Node):
         self.declare_parameter('image_source', 'ros2')  # 图像来源: "ros2" 或 "rtsp"
         self.declare_parameter('image_topic', '/camera/camera/color/image_raw')  # ROS2 图像话题
         self.declare_parameter('rtsp_url', 'rtsp://192.168.168.168:8554/test')  # RTSP 流地址
-        self.declare_parameter('control_topic', '/navigation/florence')
+        self.declare_parameter('control_topic', '/navigation/florence')  # 控制信号话题 1
+        self.declare_parameter('control_topic_2', '/nav/arrival')  # 控制信号话题 2（可选）
+        self.declare_parameter('ready_topic', '/speech/ready')  # 准备接受结果的话题
         self.declare_parameter('model_path', 'Qwen/Qwen3-VL-2B-Instruct')  # Qwen3-VL 模型路径（本地路径或 HuggingFace ID）
         self.declare_parameter('task_type', 'more_detailed_cap')
         self.declare_parameter('result_topic', '/florence2/caption')
@@ -254,6 +257,11 @@ class Qwen3VLControlNode(Node):
         # 处理状态标志（避免重复处理）
         self.is_processing = False
         self.processing_lock = threading.Lock()
+        
+        # Ready 状态和结果缓存
+        self.ready_received = False
+        self.cached_result = None
+        self.ready_lock = threading.Lock()
         
         # RTSP 相关
         self.rtsp_cap = None
@@ -281,15 +289,41 @@ class Qwen3VLControlNode(Node):
         else:
             raise ValueError(f'不支持的图像源类型: {image_source}，支持的类型: "ros2", "rtsp"')
         
-        # 创建控制信号订阅者
+        # 创建控制信号订阅者（String 类型，接收 "操场" 等触发词）
+        # 订阅第一个控制话题
         control_topic = self.get_parameter('control_topic').value
         self.control_subscription = self.create_subscription(
-            Int8,
+            String,
             control_topic,
             self.control_callback,
             10  # QoS depth = 10，确保信号不丢失
         )
-        self.get_logger().info(f'🎮 已订阅控制信号话题: {control_topic}')
+        self.get_logger().info(f'🎮 已订阅控制信号话题 1: {control_topic} (String类型，触发词: "操场")')
+        
+        # 订阅第二个控制话题（如果配置了且与话题1不同）
+        control_topic_2 = self.get_parameter('control_topic_2').value
+        if control_topic_2 and control_topic_2 != control_topic:
+            self.control_subscription_2 = self.create_subscription(
+                Int8,
+                control_topic_2,
+                self.control_callback_2,
+                10  # QoS depth = 10，确保信号不丢失
+            )
+            self.get_logger().info(f'🎮 已订阅控制信号话题 2: {control_topic_2} (Int8类型，期望值: 1)')
+        else:
+            self.control_subscription_2 = None
+            if control_topic_2 == control_topic:
+                self.get_logger().warn(f'⚠️  控制话题 2 与话题 1 相同，跳过重复订阅')
+        
+        # 创建 ready 信号订阅者
+        ready_topic = self.get_parameter('ready_topic').value
+        self.ready_subscription = self.create_subscription(
+            Bool,
+            ready_topic,
+            self.ready_callback,
+            10  # QoS depth = 10，确保信号不丢失
+        )
+        self.get_logger().info(f'✅ 已订阅准备信号话题: {ready_topic} (Bool类型)')
         
         # 创建结果发布者
         result_topic = self.get_parameter('result_topic').value
@@ -366,62 +400,151 @@ class Qwen3VLControlNode(Node):
             self.rtsp_cap.release()
             self.get_logger().info('🔄 RTSP 流已关闭')
     
-    def control_callback(self, msg: Int8):
+    def control_callback(self, msg: String):
         """
         控制信号回调函数
-        msg.data: 0 = 不处理, 1 = 处理
+        msg.data: 当接收到 "操场" 时，开始加载模型进行解析
+        """
+        trigger_word = msg.data.strip()
+        
+        if trigger_word != "操场":
+            # 不是触发词，跳过处理
+            self.get_logger().debug(f'收到控制信号: "{trigger_word}"，不是触发词 "操场"，跳过处理')
+            return
+        
+        # 检查是否有缓存结果，如果有就不再次解析
+        with self.ready_lock:
+            if self.cached_result is not None:
+                self.get_logger().info('⚠️  已有缓存结果，跳过本次解析请求（等待 ready 信号发送）')
+                return
+        
+        # 收到 "操场"，按需加载模型并处理
+        self.get_logger().info('收到控制信号 "操场": 开始处理图像...')
+        
+        # 检查是否正在处理（避免重复处理）
+        with self.processing_lock:
+            if self.is_processing:
+                self.get_logger().warn('上一次处理尚未完成，跳过本次请求')
+                return
+            self.is_processing = True
+        
+        try:
+            # 获取最新图像（根据图像源类型）
+            image_source = self.get_parameter('image_source').value
+            
+            if image_source == 'ros2':
+                # ROS2 模式：从话题获取图像
+                with self.latest_image_lock:
+                    if self.latest_image_msg is None:
+                        self.get_logger().warn('⚠️  尚未收到图像，无法处理')
+                        return
+                    image_msg = self.latest_image_msg
+                self._process_with_model(image_msg)
+            elif image_source == 'rtsp':
+                # RTSP 模式：从 RTSP 流获取图像
+                with self.latest_image_lock:
+                    if self.latest_rtsp_frame is None:
+                        self.get_logger().warn('⚠️  尚未收到 RTSP 帧，无法处理')
+                        return
+                    frame = self.latest_rtsp_frame.copy()
+                self._process_with_rtsp_frame(frame)
+            else:
+                self.get_logger().error(f'❌ 不支持的图像源类型: {image_source}')
+                return
+            
+        except Exception as e:
+            self.get_logger().error(f'❌ 处理图像时出错: {e}')
+            import traceback
+            self.get_logger().error(traceback.format_exc())
+        finally:
+            with self.processing_lock:
+                self.is_processing = False
+    
+    def control_callback_2(self, msg: Int8):
+        """
+        控制信号回调函数 2（Int8 类型）
+        msg.data: 当接收到 1 时，开始加载模型进行解析
         """
         signal = msg.data
         
-        if signal == 0:
-            # 收到 0，不处理
-            self.get_logger().debug('收到控制信号 0: 跳过处理')
+        if signal != 1:
+            # 不是期望值，跳过处理
+            self.get_logger().debug(f'收到控制信号: {signal}，不是期望值 1，跳过处理')
             return
         
-        if signal == 1:
-            # 收到 1，按需加载模型并处理
-            self.get_logger().info('收到控制信号 1: 开始处理图像...')
+        # 检查是否有缓存结果，如果有就不再次解析
+        with self.ready_lock:
+            if self.cached_result is not None:
+                self.get_logger().info('⚠️  已有缓存结果，跳过本次解析请求（等待 ready 信号发送）')
+                return
+        
+        # 收到 1，按需加载模型并处理
+        self.get_logger().info('收到控制信号 1: 开始处理图像...')
+        
+        # 检查是否正在处理（避免重复处理）
+        with self.processing_lock:
+            if self.is_processing:
+                self.get_logger().warn('上一次处理尚未完成，跳过本次请求')
+                return
+            self.is_processing = True
+        
+        try:
+            # 获取最新图像（根据图像源类型）
+            image_source = self.get_parameter('image_source').value
             
-            # 检查是否正在处理（避免重复处理）
+            if image_source == 'ros2':
+                # ROS2 模式：从话题获取图像
+                with self.latest_image_lock:
+                    if self.latest_image_msg is None:
+                        self.get_logger().warn('⚠️  尚未收到图像，无法处理')
+                        return
+                    image_msg = self.latest_image_msg
+                self._process_with_model(image_msg)
+            elif image_source == 'rtsp':
+                # RTSP 模式：从 RTSP 流获取图像
+                with self.latest_image_lock:
+                    if self.latest_rtsp_frame is None:
+                        self.get_logger().warn('⚠️  尚未收到 RTSP 帧，无法处理')
+                        return
+                    frame = self.latest_rtsp_frame.copy()
+                self._process_with_rtsp_frame(frame)
+            else:
+                self.get_logger().error(f'❌ 不支持的图像源类型: {image_source}')
+                return
+            
+        except Exception as e:
+            self.get_logger().error(f'❌ 处理图像时出错: {e}')
+            import traceback
+            self.get_logger().error(traceback.format_exc())
+        finally:
             with self.processing_lock:
-                if self.is_processing:
-                    self.get_logger().warn('上一次处理尚未完成，跳过本次请求')
-                    return
-                self.is_processing = True
-            
-            try:
-                # 获取最新图像（根据图像源类型）
-                image_source = self.get_parameter('image_source').value
-                
-                if image_source == 'ros2':
-                    # ROS2 模式：从话题获取图像
-                    with self.latest_image_lock:
-                        if self.latest_image_msg is None:
-                            self.get_logger().warn('⚠️  尚未收到图像，无法处理')
-                            return
-                        image_msg = self.latest_image_msg
-                    self._process_with_model(image_msg)
-                elif image_source == 'rtsp':
-                    # RTSP 模式：从 RTSP 流获取图像
-                    with self.latest_image_lock:
-                        if self.latest_rtsp_frame is None:
-                            self.get_logger().warn('⚠️  尚未收到 RTSP 帧，无法处理')
-                            return
-                        frame = self.latest_rtsp_frame.copy()
-                    self._process_with_rtsp_frame(frame)
+                self.is_processing = False
+    
+    def ready_callback(self, msg: Bool):
+        """
+        Ready 信号回调函数
+        msg.data: true 表示准备接受结果
+        """
+        if msg.data:
+            with self.ready_lock:
+                if not self.ready_received:
+                    self.ready_received = True
+                    self.get_logger().info('✅ 收到 ready 信号: 准备接受结果')
+                    
+                    # 如果有缓存的结果，立即发送
+                    if self.cached_result is not None:
+                        self.get_logger().info('📤 发送缓存的结果...')
+                        cached = self.cached_result
+                        self.cached_result = None  # 先清空缓存，避免重复使用
+                        self._publish_caption(cached)
+                        print("\033[36m" + "─" * 80 + "\033[0m")
+                    else:
+                        # 没有缓存结果，等待后续处理结果
+                        self.get_logger().info('⏳ 当前没有缓存结果，等待后续处理完成后直接发送')
                 else:
-                    self.get_logger().error(f'❌ 不支持的图像源类型: {image_source}')
-                    return
-                
-            except Exception as e:
-                self.get_logger().error(f'❌ 处理图像时出错: {e}')
-                import traceback
-                self.get_logger().error(traceback.format_exc())
-            finally:
-                with self.processing_lock:
-                    self.is_processing = False
+                    self.get_logger().debug('ready 信号已接收过，忽略重复信号')
         else:
-            self.get_logger().warn(f'⚠️  收到未知控制信号: {signal}，期望 0 或 1')
+            self.get_logger().debug('收到 ready=false，忽略')
     
     def _process_with_model(self, image_msg: ROSImage):
         """
@@ -456,6 +579,8 @@ class Qwen3VLControlNode(Node):
         """
         caption_generator = None
         try:
+            # 0. 注意：不在这里清空缓存，因为缓存检查在 control_callback 中已经完成
+            # 如果进入这里，说明没有缓存结果，可以安全地进行新的处理
             
             # 1.1 根据 flip 参数决定是否翻转图像
             flip = self.get_parameter('flip').value
@@ -478,10 +603,20 @@ class Qwen3VLControlNode(Node):
             # 3. 生成描述
             caption = caption_generator.generate_caption(pil_image)
             
-            # 4. 发布结果
-            self._publish_caption(caption)
-            
             self.get_logger().info(f'✅ 生成描述: {caption}')
+            
+            # 4. 检查是否已经接收到 ready 信号
+            with self.ready_lock:
+                if self.ready_received:
+                    # 已经接收到 ready，直接发送结果
+                    self.get_logger().info('📤 ready 信号已接收，直接发送结果')
+                    self._publish_caption(caption)
+                    # 发送后清空缓存（确保不会重复使用）
+                    self.cached_result = None
+                else:
+                    # 尚未接收到 ready，缓存结果
+                    self.get_logger().info('⏳ 尚未接收到 ready 信号，缓存结果，等待 ready 信号...')
+                    self.cached_result = caption
             
         finally:
             # 5. 释放模型资源
