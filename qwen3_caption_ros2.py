@@ -39,7 +39,7 @@ import cv2
 
 
 class Qwen3VLCaption:
-    """Qwen3-VL 图像描述生成器（精简版，使用 GGUF 格式）"""
+    """Qwen3-VL 图像描述生成器"""
 
     # 任务类型对应的提示词模板
     PROMPT_TEMPLATES = {

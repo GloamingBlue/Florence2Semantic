@@ -103,6 +103,7 @@ class Florence2Caption:
                 torch_dtype=self.torch_dtype,
                 device_map=self.device,
                 trust_remote_code=trust_remote_code,
+                attn_implementation="eager",
             )
             self.processor = AutoProcessor.from_pretrained(
                 model_path,
