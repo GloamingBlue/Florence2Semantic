@@ -11,13 +11,15 @@ This project is used for video semantic generation of the RealSense camera on th
 
 ### 核心脚本
 
-- **`florence2_caption.py`**: 语义分析功能的最小实现，适用于分析本地图像进行测试
+- **`florence2_test.py`**: 语义分析功能的最小实现，适用于分析本地图像进行测试
 - **`florence2_caption_ros2.py`**: 将前者集成到 ROS2 中，实时监测视频流接收控制信号进行语义分析，支持：
   - ROS2 话题模式：从 ROS2 话题订阅图像
   - RTSP 流模式：从 RTSP 视频流获取图像
   - 翻译功能：将英文描述翻译为中文
-  - 性能监测：显示详细的推理时间统计
-- **`florence2_caption_ros2_lite.py`**: 精简版，移除了性能监测功能，只保留核心语义生成功能
+- **`qwen3_test.py`**: qwen3-vl语义分析功能的最小实现，适用于分析本地图像进行测试
+- **`qwen3_caption_ros2.py`**: 将前者集成到 ROS2 中，实时监测视频流接收控制信号进行语义分析，支持：
+  - ROS2 话题模式：从 ROS2 话题订阅图像
+  - RTSP 流模式：从 RTSP 视频流获取图像
 
 ### 配置文件
 
@@ -25,6 +27,10 @@ This project is used for video semantic generation of the RealSense camera on th
   - 图像源选择（ROS2 话题或 RTSP 流）
   - 模型参数配置
   - 翻译功能配置
+  - 兼容命令行参数覆盖
+- **`configs/qwen3vl_caption_params.yaml`**: ROS2 节点的配置文件，支持：
+  - 图像源选择（ROS2 话题或 RTSP 流）
+  - 模型参数配置
   - 兼容命令行参数覆盖
 
 ## 主要功能
