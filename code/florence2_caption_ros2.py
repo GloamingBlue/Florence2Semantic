@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Qwen3-VL 图像描述生成脚本（精简版）
-使用 Qwen3-VL-2B-Instruct 模型生成图像描述（HuggingFace 格式）
+Florence2 图像描述生成脚本（精简版）
+独立使用 Florence2 模型生成图像描述，不依赖 AnyLabeling GUI
 精简版：移除了性能监测和时间计算功能，只保留核心语义生成功能
 """
 
@@ -16,11 +16,14 @@ from typing import Union, Optional
 
 warnings.filterwarnings("ignore")
 
+# 翻译相关导入
+from transformers import MarianMTModel, MarianTokenizer
+
 try:
     import torch
     from PIL import Image
     import numpy as np
-    from transformers import Qwen3VLForConditionalGeneration, AutoProcessor
+    from transformers import AutoModelForCausalLM, AutoProcessor
     from transformers.dynamic_module_utils import get_imports
 except ImportError as e:
     print(f"❌ 缺少必要的依赖包: {e}")
@@ -38,14 +41,14 @@ from cv_bridge import CvBridge
 import cv2
 
 
-class Qwen3VLCaption:
-    """Qwen3-VL 图像描述生成器"""
+class Florence2Caption:
+    """Florence2 图像描述生成器（精简版）"""
 
-    # 任务类型对应的提示词模板
-    PROMPT_TEMPLATES = {
-        "caption": "直接客观描述场景内容，包括场景中的物体及其位置关系，切记不要产生主观的联想解释。要求：1) 使用纯文本，不要使用markdown格式、分隔符、换行符等特殊字符；2) 不要使用'照片'、'图片'、'画面'、'这张'等词汇，直接描述场景本身；3) 用一段连贯的文字描述，不要分段；4) 每个物体或特征只描述一次，不要重复描述相同的内容；5) 避免循环重复，描述要简洁完整",
-        "detailed_cap": "直接详细描述场景内容，包括所有可见的物体、它们的位置、颜色、纹理、场景上下文和光照条件。要求：1) 使用纯文本，不要使用markdown格式、分隔符、换行符等特殊字符；2) 不要使用'照片'、'图片'、'画面'、'这张'等词汇，直接描述场景本身；3) 用一段连贯的文字描述，不要分段；4) 每个物体或特征只描述一次，不要重复描述相同的内容；5) 避免循环重复，描述要简洁完整；6) 如果多个位置有相同类型的物体，可以统一描述，不要逐个重复",
-        "more_detailed_cap": "直接非常详细地描述场景内容，包括所有可见的物体、它们的位置、颜色、纹理、场景上下文、光照条件和其他相关细节。要求：1) 使用纯文本，不要使用markdown格式、分隔符、换行符等特殊字符；2) 不要使用'照片'、'图片'、'画面'、'这张'等词汇，直接描述场景本身；3) 用一段连贯的文字描述，不要分段；4) 每个物体或特征只描述一次，不要重复描述相同的内容；5) 避免循环重复，描述要简洁完整；6) 如果多个位置有相同类型的物体，可以统一描述，不要逐个重复；7) 保持描述的多样性和连贯性，避免使用相同的句式重复描述",
+    # 任务类型映射
+    TASK_MAPPING = {
+        "caption": "<CAPTION>",
+        "detailed_cap": "<DETAILED_CAPTION>",
+        "more_detailed_cap": "<MORE_DETAILED_CAPTION>",
     }
 
     def __init__(
@@ -54,34 +57,31 @@ class Qwen3VLCaption:
         task_type: str = "caption",
         trust_remote_code: bool = True,
         max_new_tokens: int = 1024,
-        temperature: float = 0.7,
-        top_p: float = 0.8,
-        do_sample: bool = True,
+        do_sample: bool = False,
+        num_beams: int = 3,
     ):
         """
-        初始化 Qwen3-VL 模型（HuggingFace 格式）
+        初始化 Florence2 模型
 
         Args:
-            model_path: 模型路径（本地路径或 HuggingFace 模型 ID，如 "Qwen/Qwen3-VL-2B-Instruct"）
+            model_path: 模型路径（本地路径或 HuggingFace 模型 ID）
             task_type: 任务类型，可选 "caption", "detailed_cap", "more_detailed_cap"
             trust_remote_code: 是否信任远程代码
             max_new_tokens: 最大生成 token 数
-            temperature: 采样温度
-            top_p: nucleus sampling 参数
-            do_sample: 是否使用采样生成
+            do_sample: 是否使用采样
+            num_beams: beam search 的 beam 数量
         """
-        if task_type not in self.PROMPT_TEMPLATES:
+        if task_type not in self.TASK_MAPPING:
             raise ValueError(
                 f"不支持的任务类型: {task_type}。"
-                f"支持的类型: {list(self.PROMPT_TEMPLATES.keys())}"
+                f"支持的类型: {list(self.TASK_MAPPING.keys())}"
             )
 
         self.task_type = task_type
-        self.prompt_template = self.PROMPT_TEMPLATES[task_type]
+        self.task_token = self.TASK_MAPPING[task_type]
         self.max_new_tokens = max_new_tokens
-        self.temperature = temperature
-        self.top_p = top_p
         self.do_sample = do_sample
+        self.num_beams = num_beams
 
         # 自动选择设备
         self.device = "cuda:0" if torch.cuda.is_available() else "cpu"
@@ -103,19 +103,99 @@ class Qwen3VLCaption:
         with patch(
             "transformers.dynamic_module_utils.get_imports", fixed_get_imports
         ):
-            self.model = Qwen3VLForConditionalGeneration.from_pretrained(
+            self.model = AutoModelForCausalLM.from_pretrained(
                 model_path,
                 torch_dtype=self.torch_dtype,
                 device_map=self.device,
                 trust_remote_code=trust_remote_code,
-                attn_implementation="eager",  # 因为aarch架构上暂未找到适配gqa的torch版本,如果用的是x86架构,可以注释掉这行
+                attn_implementation="eager",
             )
             self.processor = AutoProcessor.from_pretrained(
                 model_path,
                 trust_remote_code=trust_remote_code,
             )
 
-        print(f"✅ Qwen3-VL 模型加载完成")
+        print(f"✅ Caption 模型加载完成")
+        
+        # 翻译模型（可选，按需加载）
+        self.translator = None
+        self.translate_to_chinese = False
+
+    def set_translation(
+        self, 
+        enable: bool = True, 
+        model_name: str = "Helsinki-NLP/opus-mt-en-zh",
+        model_path: Optional[str] = None
+    ):
+        """
+        设置是否启用翻译功能
+        
+        Args:
+            enable: 是否启用翻译
+            model_name: 翻译模型名称（HuggingFace ID），当 model_path 为 None 时使用
+                      - "Helsinki-NLP/opus-mt-en-zh" (推荐，英文到中文)
+                      - "facebook/nllb-200-distilled-600M" (多语言，需要指定语言代码)
+            model_path: 本地翻译模型路径（如果提供，将优先使用本地路径）
+        """
+        self.translate_to_chinese = enable
+        
+        if enable and self.translator is None:
+            # 优先使用本地路径
+            if model_path and Path(model_path).exists():
+                print(f"🔄 正在从本地路径加载翻译模型: {model_path}")
+                try:
+                    self.translator_tokenizer = MarianTokenizer.from_pretrained(model_path)
+                    self.translator_model = MarianMTModel.from_pretrained(model_path)
+                    if torch.cuda.is_available():
+                        self.translator_model = self.translator_model.to(self.device)
+                    print(f"✅ 翻译模型加载完成（本地路径）")
+                except Exception as e:
+                    print(f"⚠️  从本地路径加载翻译模型失败: {e}")
+                    self.translate_to_chinese = False
+            elif model_path:
+                print(f"⚠️  本地翻译模型路径不存在: {model_path}，将使用 HuggingFace 模型")
+                # 回退到 HuggingFace 模型
+                model_path = None
+            
+            if enable and model_path is None:
+                print(f"🔄 正在从 HuggingFace 加载翻译模型: {model_name}")
+                try:
+                    self.translator_tokenizer = MarianTokenizer.from_pretrained(model_name)
+                    self.translator_model = MarianMTModel.from_pretrained(model_name)
+                    if torch.cuda.is_available():
+                        self.translator_model = self.translator_model.to(self.device)
+                    print(f"✅ 翻译模型加载完成（HuggingFace）")
+                except Exception as e:
+                    print(f"⚠️  翻译模型加载失败: {e}")
+                    self.translate_to_chinese = False
+
+    def _translate_to_chinese(self, text: str) -> str:
+        """
+        将英文文本翻译为中文
+        
+        Args:
+            text: 英文文本
+            
+        Returns:
+            中文文本
+        """
+        if not self.translate_to_chinese or self.translator_model is None:
+            return text
+        
+        try:
+            # 翻译
+            inputs = self.translator_tokenizer(text, return_tensors="pt", padding=True, truncation=True, max_length=512)
+            if torch.cuda.is_available():
+                inputs = {k: v.to(self.device) for k, v in inputs.items()}
+            
+            with torch.no_grad():
+                translated = self.translator_model.generate(**inputs, max_length=512)
+            
+            translated_text = self.translator_tokenizer.decode(translated[0], skip_special_tokens=True)
+            return translated_text
+        except Exception as e:
+            print(f"⚠️  翻译失败: {e}，返回原文")
+            return text
 
     def generate_caption(
         self, 
@@ -150,75 +230,80 @@ class Qwen3VLCaption:
         else:
             raise TypeError(f"不支持的图像类型: {type(image)}，支持类型: str, PIL.Image, np.ndarray")
 
-        # 构建消息格式（根据官方文档）
-        prompt = self.prompt_template
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image",
-                        "image": pil_image,  # 直接传入 PIL Image 对象
-                    },
-                    {"type": "text", "text": prompt},
-                ],
-            }
-        ]
-
-        # 使用 apply_chat_template 处理消息（根据官方文档）
-        print("🤖 正在生成描述...")
-        inputs = self.processor.apply_chat_template(
-            messages,
-            tokenize=True,
-            add_generation_prompt=True,
-            return_dict=True,
-            return_tensors="pt"
+        # 预处理
+        prompt = self.task_token
+        inputs = self.processor(
+            text=prompt, images=pil_image, return_tensors="pt"
         )
-        
-        # 将输入移动到设备
-        inputs = inputs.to(self.device)
+
+        # 将输入移动到设备并匹配模型数据类型
+        model_dtype = next(self.model.parameters()).dtype
+        inputs = {
+            k: (
+                v.to(device=self.device, dtype=model_dtype)
+                if torch.is_floating_point(v)
+                else v.to(self.device)
+            )
+            for k, v in inputs.items()
+        }
 
         # 生成描述
+        print("🤖 正在生成描述...")
         with torch.no_grad():
             generated_ids = self.model.generate(
-                **inputs,
+                input_ids=inputs["input_ids"],
+                pixel_values=inputs["pixel_values"],
                 max_new_tokens=self.max_new_tokens,
                 do_sample=self.do_sample,
-                temperature=self.temperature if self.do_sample else None,
-                top_p=self.top_p if self.do_sample else None,
-                repetition_penalty=1.3,  # 添加重复惩罚，减少重复生成（值越大，惩罚越强）
+                num_beams=self.num_beams,
+                use_cache=False,  # 禁用缓存以避免 past_key_values 为 None 的问题
             )
 
-        # 截取新生成的部分（根据官方文档）
-        generated_ids_trimmed = [
-            out_ids[len(in_ids):] 
-            for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
-        ]
-        
         # 解码生成的文本
-        output_text = self.processor.batch_decode(
-            generated_ids_trimmed, 
-            skip_special_tokens=True, 
-            clean_up_tokenization_spaces=False
+        generated_text = self.processor.batch_decode(
+            generated_ids, skip_special_tokens=False
+        )[0]
+
+        # 后处理获取描述
+        results = self.processor.post_process_generation(
+            generated_text, task=self.task_token, image_size=pil_image.size
         )
-        
+
         # 提取描述文本
-        final_caption = output_text[0].strip() if output_text else ""
+        if self.task_token in results:
+            caption = results[self.task_token]
+            if isinstance(caption, str):
+                final_caption = caption
+            elif isinstance(caption, dict) and "caption" in caption:
+                final_caption = caption["caption"]
+            else:
+                final_caption = str(caption)
+        else:
+            final_caption = generated_text
+
+        # 如果启用了翻译，将英文翻译为中文
+        if self.translate_to_chinese:
+            print("🔄 正在翻译为中文...")
+            final_caption = self._translate_to_chinese(final_caption)
 
         return final_caption
-    
+
     def __del__(self):
         """清理资源"""
         if hasattr(self, "model"):
             del self.model
         if hasattr(self, "processor"):
             del self.processor
+        if hasattr(self, "translator_model"):
+            del self.translator_model
+        if hasattr(self, "translator_tokenizer"):
+            del self.translator_tokenizer
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
 
 # ROS2 轻量级控制节点（不加载模型）
-class Qwen3VLControlNode(Node):
+class Florence2ControlNode(Node):
     """
     轻量级控制节点，负责：
     - 持续接收图像流，保存最新一帧
@@ -227,23 +312,24 @@ class Qwen3VLControlNode(Node):
     """
     
     def __init__(self):
-        super().__init__('qwen3vl_control_node')
+        super().__init__('florence2_control_node')
         
         # 参数声明
         self.declare_parameter('image_source', 'ros2')  # 图像来源: "ros2" 或 "rtsp"
         self.declare_parameter('image_topic', '/camera/camera/color/image_raw')  # ROS2 图像话题
         self.declare_parameter('rtsp_url', 'rtsp://192.168.168.168:8554/test')  # RTSP 流地址
-        self.declare_parameter('control_topic', '/navigation/florence')  # 控制信号话题 1
-        self.declare_parameter('control_topic_2', '/nav/arrival')  # 控制信号话题 2（可选）
-        self.declare_parameter('ready_topic', '/speech/ready')  # 准备接受结果的话题
-        self.declare_parameter('model_path', 'Qwen/Qwen3-VL-2B-Instruct')  # Qwen3-VL 模型路径（本地路径或 HuggingFace ID）
+        self.declare_parameter('control_topic', '/navigation/florence')  # 控制信号话题 1 (String类型，触发词: "操场")
+        self.declare_parameter('control_topic_2', '/nav/arrival')  # 控制信号话题 2 (Int8类型，期望值: 1，触发发送)
+        self.declare_parameter('model_path', '/home/ubun/xanylabeling_data/models/florence')
         self.declare_parameter('task_type', 'more_detailed_cap')
         self.declare_parameter('result_topic', '/florence2/caption')
         self.declare_parameter('max_new_tokens', 1024)
-        self.declare_parameter('temperature', 0.7)  # 采样温度
-        self.declare_parameter('top_p', 0.8)  # nucleus sampling
-        self.declare_parameter('do_sample', True)  # 是否使用采样生成
-        self.declare_parameter('trust_remote_code', True)  # 是否信任远程代码
+        self.declare_parameter('num_beams', 3)
+        self.declare_parameter('do_sample', False)
+        self.declare_parameter('trust_remote_code', True)
+        self.declare_parameter('translate_to_chinese', True)  # 是否翻译为中文
+        self.declare_parameter('translation_model', 'Helsinki-NLP/opus-mt-en-zh')  # 翻译模型（HuggingFace ID）
+        self.declare_parameter('translation_model_path', '')  # 翻译模型本地路径（可选）
         self.declare_parameter('flip', False)  # 是否在语义生成前将图像旋转180度
         
         # 获取图像源类型
@@ -258,10 +344,9 @@ class Qwen3VLControlNode(Node):
         self.is_processing = False
         self.processing_lock = threading.Lock()
         
-        # Ready 状态和结果缓存
-        self.ready_received = False
+        # 结果缓存
         self.cached_result = None
-        self.ready_lock = threading.Lock()
+        self.cache_lock = threading.Lock()
         
         # RTSP 相关
         self.rtsp_cap = None
@@ -309,21 +394,11 @@ class Qwen3VLControlNode(Node):
                 self.control_callback_2,
                 10  # QoS depth = 10，确保信号不丢失
             )
-            self.get_logger().info(f'🎮 已订阅控制信号话题 2: {control_topic_2} (Int8类型，期望值: 1)')
+            self.get_logger().info(f'🎮 已订阅控制信号话题 2: {control_topic_2} (Int8类型，期望值: 1，触发发送)')
         else:
             self.control_subscription_2 = None
             if control_topic_2 == control_topic:
                 self.get_logger().warn(f'⚠️  控制话题 2 与话题 1 相同，跳过重复订阅')
-        
-        # 创建 ready 信号订阅者
-        ready_topic = self.get_parameter('ready_topic').value
-        self.ready_subscription = self.create_subscription(
-            Bool,
-            ready_topic,
-            self.ready_callback,
-            10  # QoS depth = 10，确保信号不丢失
-        )
-        self.get_logger().info(f'✅ 已订阅准备信号话题: {ready_topic} (Bool类型)')
         
         # 创建结果发布者
         result_topic = self.get_parameter('result_topic').value
@@ -334,7 +409,7 @@ class Qwen3VLControlNode(Node):
         )
         self.get_logger().info(f'📤 已创建结果发布话题: {result_topic}')
         
-        self.get_logger().info('✅ Qwen3-VL Control Node 初始化完成（模型未加载）')
+        self.get_logger().info('✅ Florence2 Control Node 初始化完成（模型未加载）')
         self.get_logger().info('⏳ 等待控制信号...')
     
     def image_callback(self, msg: ROSImage):
@@ -402,8 +477,8 @@ class Qwen3VLControlNode(Node):
     
     def control_callback(self, msg: String):
         """
-        控制信号回调函数
-        msg.data: 当接收到 "操场" 时，开始加载模型进行解析
+        控制信号回调函数 1
+        msg.data: 当接收到 "操场" 时，开始加载模型进行解析，但不发送结果（只缓存）
         """
         trigger_word = msg.data.strip()
         
@@ -412,14 +487,8 @@ class Qwen3VLControlNode(Node):
             self.get_logger().debug(f'收到控制信号: "{trigger_word}"，不是触发词 "操场"，跳过处理')
             return
         
-        # 检查是否有缓存结果，如果有就不再次解析
-        with self.ready_lock:
-            if self.cached_result is not None:
-                self.get_logger().info('⚠️  已有缓存结果，跳过本次解析请求（等待 ready 信号发送）')
-                return
-        
-        # 收到 "操场"，按需加载模型并处理
-        self.get_logger().info('收到控制信号 "操场": 开始处理图像...')
+        # 收到 "操场"，按需加载模型并处理（只缓存，不发送）
+        self.get_logger().info('收到控制信号 "操场": 开始处理图像（解析后缓存，等待 control_topic_2 发送）...')
         
         # 检查是否正在处理（避免重复处理）
         with self.processing_lock:
@@ -439,7 +508,7 @@ class Qwen3VLControlNode(Node):
                         self.get_logger().warn('⚠️  尚未收到图像，无法处理')
                         return
                     image_msg = self.latest_image_msg
-                self._process_with_model(image_msg)
+                self._process_with_model(image_msg, send_result=False)
             elif image_source == 'rtsp':
                 # RTSP 模式：从 RTSP 流获取图像
                 with self.latest_image_lock:
@@ -447,7 +516,7 @@ class Qwen3VLControlNode(Node):
                         self.get_logger().warn('⚠️  尚未收到 RTSP 帧，无法处理')
                         return
                     frame = self.latest_rtsp_frame.copy()
-                self._process_with_rtsp_frame(frame)
+                self._process_with_rtsp_frame(frame, send_result=False)
             else:
                 self.get_logger().error(f'❌ 不支持的图像源类型: {image_source}')
                 return
@@ -463,7 +532,9 @@ class Qwen3VLControlNode(Node):
     def control_callback_2(self, msg: Int8):
         """
         控制信号回调函数 2（Int8 类型）
-        msg.data: 当接收到 1 时，开始加载模型进行解析
+        msg.data: 当接收到 1 时：
+        - 如果有缓存结果，直接发送缓存结果（不进行解析）
+        - 如果没有缓存结果，开始加载模型进行解析并在解析完成后发送结果
         """
         signal = msg.data
         
@@ -472,14 +543,19 @@ class Qwen3VLControlNode(Node):
             self.get_logger().debug(f'收到控制信号: {signal}，不是期望值 1，跳过处理')
             return
         
-        # 检查是否有缓存结果，如果有就不再次解析
-        with self.ready_lock:
+        # 检查是否有缓存结果
+        with self.cache_lock:
             if self.cached_result is not None:
-                self.get_logger().info('⚠️  已有缓存结果，跳过本次解析请求（等待 ready 信号发送）')
+                # 有缓存结果，直接发送，不进行解析
+                self.get_logger().info('📤 收到控制信号 1: 检测到缓存结果，直接发送（跳过解析）')
+                cached = self.cached_result
+                self.cached_result = None  # 清空缓存，避免重复使用
+                self._publish_caption(cached)
+                print("\033[36m" + "─" * 80 + "\033[0m")
                 return
         
-        # 收到 1，按需加载模型并处理
-        self.get_logger().info('收到控制信号 1: 开始处理图像...')
+        # 没有缓存结果，开始解析并在解析完成后发送
+        self.get_logger().info('收到控制信号 1: 开始处理图像（解析完成后立即发送）...')
         
         # 检查是否正在处理（避免重复处理）
         with self.processing_lock:
@@ -499,7 +575,7 @@ class Qwen3VLControlNode(Node):
                         self.get_logger().warn('⚠️  尚未收到图像，无法处理')
                         return
                     image_msg = self.latest_image_msg
-                self._process_with_model(image_msg)
+                self._process_with_model(image_msg, send_result=True)
             elif image_source == 'rtsp':
                 # RTSP 模式：从 RTSP 流获取图像
                 with self.latest_image_lock:
@@ -507,7 +583,7 @@ class Qwen3VLControlNode(Node):
                         self.get_logger().warn('⚠️  尚未收到 RTSP 帧，无法处理')
                         return
                     frame = self.latest_rtsp_frame.copy()
-                self._process_with_rtsp_frame(frame)
+                self._process_with_rtsp_frame(frame, send_result=True)
             else:
                 self.get_logger().error(f'❌ 不支持的图像源类型: {image_source}')
                 return
@@ -520,68 +596,42 @@ class Qwen3VLControlNode(Node):
             with self.processing_lock:
                 self.is_processing = False
     
-    def ready_callback(self, msg: Bool):
-        """
-        Ready 信号回调函数
-        msg.data: true 表示准备接受结果
-        """
-        if msg.data:
-            with self.ready_lock:
-                if not self.ready_received:
-                    self.ready_received = True
-                    self.get_logger().info('✅ 收到 ready 信号: 准备接受结果')
-                    
-                    # 如果有缓存的结果，立即发送
-                    if self.cached_result is not None:
-                        self.get_logger().info('📤 发送缓存的结果...')
-                        cached = self.cached_result
-                        self.cached_result = None  # 先清空缓存，避免重复使用
-                        self._publish_caption(cached)
-                        print("\033[36m" + "─" * 80 + "\033[0m")
-                    else:
-                        # 没有缓存结果，等待后续处理结果
-                        self.get_logger().info('⏳ 当前没有缓存结果，等待后续处理完成后直接发送')
-                else:
-                    self.get_logger().debug('ready 信号已接收过，忽略重复信号')
-        else:
-            self.get_logger().debug('收到 ready=false，忽略')
-    
-    def _process_with_model(self, image_msg: ROSImage):
+    def _process_with_model(self, image_msg: ROSImage, send_result: bool = True):
         """
         按需加载模型，处理 ROS2 图像消息，然后释放资源
         
         Args:
             image_msg: ROS2 Image 消息
+            send_result: 是否在解析完成后立即发送结果（True=立即发送，False=只缓存）
         """
         # 1. 转换图像
         self.get_logger().info('🔄 转换图像...')
         pil_image = self._ros_image_to_pil(image_msg)
-        self._process_image(pil_image)
+        self._process_image(pil_image, send_result=send_result)
     
-    def _process_with_rtsp_frame(self, frame: np.ndarray):
+    def _process_with_rtsp_frame(self, frame: np.ndarray, send_result: bool = True):
         """
         按需加载模型，处理 RTSP 帧，然后释放资源
         
         Args:
             frame: RTSP 帧（RGB numpy array）
+            send_result: 是否在解析完成后立即发送结果（True=立即发送，False=只缓存）
         """
         # 1. 转换图像
         self.get_logger().info('🔄 转换图像...')
         pil_image = Image.fromarray(frame)
-        self._process_image(pil_image)
+        self._process_image(pil_image, send_result=send_result)
     
-    def _process_image(self, pil_image: Image.Image):
+    def _process_image(self, pil_image: Image.Image, send_result: bool = True):
         """
         处理图像（通用方法，支持 ROS2 和 RTSP）
         
         Args:
             pil_image: PIL Image 对象
+            send_result: 是否在解析完成后立即发送结果（True=立即发送，False=只缓存）
         """
         caption_generator = None
         try:
-            # 0. 注意：不在这里清空缓存，因为缓存检查在 control_callback 中已经完成
-            # 如果进入这里，说明没有缓存结果，可以安全地进行新的处理
-            
             # 1.1 根据 flip 参数决定是否翻转图像
             flip = self.get_parameter('flip').value
             if flip:
@@ -589,33 +639,46 @@ class Qwen3VLControlNode(Node):
                 pil_image = pil_image.rotate(180)
             
             # 2. 加载模型（按需加载）
-            self.get_logger().info('🔄 正在加载 Qwen3-VL 模型（按需加载）...')
-            caption_generator = Qwen3VLCaption(
+            self.get_logger().info('🔄 正在加载 Florence2 模型（按需加载）...')
+            caption_generator = Florence2Caption(
                 model_path=self.get_parameter('model_path').value,
                 task_type=self.get_parameter('task_type').value,
-                trust_remote_code=self.get_parameter('trust_remote_code').value,
                 max_new_tokens=self.get_parameter('max_new_tokens').value,
-                temperature=self.get_parameter('temperature').value,
-                top_p=self.get_parameter('top_p').value,
+                num_beams=self.get_parameter('num_beams').value,
                 do_sample=self.get_parameter('do_sample').value,
+                trust_remote_code=self.get_parameter('trust_remote_code').value,
             )
+            
+            # 2.1 如果启用翻译，加载翻译模型
+            translate_to_chinese = self.get_parameter('translate_to_chinese').value
+            if translate_to_chinese:
+                translation_model = self.get_parameter('translation_model').value
+                translation_model_path = self.get_parameter('translation_model_path').value
+                # 如果路径为空字符串，则使用 None（表示使用 HuggingFace 模型）
+                if translation_model_path == '':
+                    translation_model_path = None
+                caption_generator.set_translation(
+                    enable=True, 
+                    model_name=translation_model,
+                    model_path=translation_model_path
+                )
             
             # 3. 生成描述
             caption = caption_generator.generate_caption(pil_image)
             
             self.get_logger().info(f'✅ 生成描述: {caption}')
             
-            # 4. 检查是否已经接收到 ready 信号
-            with self.ready_lock:
-                if self.ready_received:
-                    # 已经接收到 ready，直接发送结果
-                    self.get_logger().info('📤 ready 信号已接收，直接发送结果')
+            # 4. 根据 send_result 参数决定是发送还是缓存
+            with self.cache_lock:
+                if send_result:
+                    # 立即发送结果
+                    self.get_logger().info('📤 解析完成，立即发送结果')
                     self._publish_caption(caption)
                     # 发送后清空缓存（确保不会重复使用）
                     self.cached_result = None
                 else:
-                    # 尚未接收到 ready，缓存结果
-                    self.get_logger().info('⏳ 尚未接收到 ready 信号，缓存结果，等待 ready 信号...')
+                    # 只缓存结果，不发送
+                    self.get_logger().info('⏳ 解析完成，缓存结果，等待 control_topic_2 信号发送...')
                     self.cached_result = caption
             
         finally:
@@ -660,12 +723,12 @@ class Qwen3VLControlNode(Node):
         self.caption_publisher.publish(msg)
         self.get_logger().debug(f'📤 已发布描述结果')
     
-    def _cleanup_model(self, caption_generator: Qwen3VLCaption):
+    def _cleanup_model(self, caption_generator: Florence2Caption):
         """
         清理模型资源
-
+        
         Args:
-            caption_generator: Qwen3VLCaption 实例
+            caption_generator: Florence2Caption 实例
         """
         try:
             # 删除模型和处理器
@@ -673,6 +736,11 @@ class Qwen3VLControlNode(Node):
                 del caption_generator.model
             if hasattr(caption_generator, 'processor'):
                 del caption_generator.processor
+            # 删除翻译模型（如果存在）
+            if hasattr(caption_generator, 'translator_model'):
+                del caption_generator.translator_model
+            if hasattr(caption_generator, 'translator_tokenizer'):
+                del caption_generator.translator_tokenizer
             
             # 清理 GPU 缓存
             if torch.cuda.is_available():
@@ -703,15 +771,15 @@ class Qwen3VLControlNode(Node):
 def main():
     """主函数"""
     parser = argparse.ArgumentParser(
-        description="使用 Qwen3-VL 模型生成图像描述（精简版，支持命令行和 ROS2 模式）",
+        description="使用 Florence2 模型生成图像描述（精简版，支持命令行和 ROS2 模式）",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例用法:
   # 命令行模式
-  python semantic_ros2.py --image path/to/image.jpg --model_path "Qwen/Qwen3-VL-2B-Instruct" --task_type detailed_cap
+  python florence2_caption_ros2_lite.py --image path/to/image.jpg --model_path /path/to/model --task_type detailed_cap
 
   # ROS2 模式
-  python semantic_ros2.py --ros2
+  python florence2_caption_ros2_lite.py --ros2
         """,
     )
 
@@ -728,8 +796,8 @@ def main():
     parser.add_argument(
         "--model_path",
         type=str,
-        default="Qwen/Qwen3-VL-2B-Instruct",
-        help="Qwen3-VL 模型路径（本地路径或 HuggingFace 模型 ID，如 Qwen/Qwen3-VL-2B-Instruct）",
+        default="/home/ubun/xanylabeling_data/models/florence",
+        help="模型路径（本地路径或 HuggingFace 模型 ID，如 microsoft/Florence-2-large-ft）",
     )
     parser.add_argument(
         "--task_type",
@@ -745,28 +813,32 @@ def main():
         help="最大生成 token 数（默认: 1024）",
     )
     parser.add_argument(
-        "--temperature",
-        type=float,
-        default=0.7,
-        help="采样温度（默认: 0.7）",
-    )
-    parser.add_argument(
-        "--top_p",
-        type=float,
-        default=0.8,
-        help="Nucleus sampling 参数（默认: 0.8）",
+        "--num_beams",
+        type=int,
+        default=3,
+        help="Beam search 的 beam 数量（默认: 3）",
     )
     parser.add_argument(
         "--do_sample",
         action="store_true",
-        default=True,
-        help="使用采样生成（默认: True）",
+        help="使用采样生成（默认: False，使用 beam search）",
     )
     parser.add_argument(
-        "--trust_remote_code",
+        "--translate_to_chinese",
         action="store_true",
-        default=True,
-        help="是否信任远程代码（默认: True）",
+        help="将生成的英文描述翻译为中文（需要额外加载翻译模型）",
+    )
+    parser.add_argument(
+        "--translation_model",
+        type=str,
+        default="Helsinki-NLP/opus-mt-en-zh",
+        help="翻译模型名称（HuggingFace ID，默认: Helsinki-NLP/opus-mt-en-zh）",
+    )
+    parser.add_argument(
+        "--translation_model_path",
+        type=str,
+        default=None,
+        help="翻译模型本地路径（如果提供，将优先使用本地路径而不是 HuggingFace 模型）",
     )
 
     # 使用 parse_known_args 以兼容 ROS2 的 --ros-args / --params-file 等参数
@@ -776,7 +848,7 @@ def main():
     if args.ros2:
         try:
             rclpy.init()
-            node = Qwen3VLControlNode()
+            node = Florence2ControlNode()
             rclpy.spin(node)
         except KeyboardInterrupt:
             print("\n⚠️  收到中断信号，正在关闭节点...")
@@ -795,15 +867,21 @@ def main():
 
     try:
         # 创建模型实例
-        caption_generator = Qwen3VLCaption(
+        caption_generator = Florence2Caption(
             model_path=args.model_path,
             task_type=args.task_type,
-            trust_remote_code=args.trust_remote_code,
             max_new_tokens=args.max_new_tokens,
-            temperature=args.temperature,
-            top_p=args.top_p,
             do_sample=args.do_sample,
+            num_beams=args.num_beams,
         )
+        
+        # 如果启用翻译，设置翻译功能
+        if args.translate_to_chinese:
+            caption_generator.set_translation(
+                enable=True, 
+                model_name=args.translation_model,
+                model_path=args.translation_model_path
+            )
 
         # 生成描述
         caption = caption_generator.generate_caption(args.image)

@@ -26,7 +26,7 @@ sudo apt-get install ros-<distro>-cv-bridge
 ### 方式 1: 命令行模式（测试用）
 
 ```bash
-python florence/florence2_caption_ros2.py \
+python code/florence2_caption_ros2.py \
     --image /path/to/image.jpg \
     --model_path /home/ubun/xanylabeling_data/models/florence \
     --task_type caption \
@@ -42,7 +42,7 @@ python florence/florence2_caption_ros2.py \
 source /opt/ros/<distro>/setup.bash
 
 # 使用 YAML 配置文件运行节点
-python florence/florence2_caption_ros2.py --ros2 \
+python code/florence2_caption_ros2.py --ros2 \
     --ros-args --params-file florence/florence2_caption_params.yaml
 ```
 
@@ -55,7 +55,7 @@ python florence/florence2_caption_ros2.py --ros2 \
 source /opt/ros/<distro>/setup.bash
 
 # 运行节点（使用代码中的默认参数）
-python florence/florence2_caption_ros2.py --ros2
+python code/florence2_caption_ros2.py --ros2
 ```
 
 #### 2.3 使用 ros2 run（需要安装为包）
@@ -69,9 +69,9 @@ ros2 run florence2_caption florence2_caption_ros2 \
 
 ```bash
 # 使用 YAML 配置文件，同时覆盖某些参数
-python florence/florence2_caption_ros2.py --ros2 \
+python code/florence2_caption_ros2.py --ros2 \
     --ros-args \
-    --params-file florence/florence2_caption_params.yaml \
+    --params-file configs/florence2_caption_params.yaml \
     -p image_topic:=/camera/camera/color/image_raw \
     -p task_type:=caption
 ```
@@ -154,7 +154,7 @@ florence2_control_node:
 启动节点：
 ```bash
 # 终端 1
-python florence2_caption_ros2.py --ros2 --ros-args --params-file configs/florence2_caption_params.yaml
+python code/florence2_caption_ros2.py --ros2 --ros-args --params-file configs/florence2_caption_params.yaml
 ```
 
 预期输出：
@@ -192,7 +192,7 @@ florence2_control_node:
 启动节点：
 ```bash
 # 终端 1
-python florence2_caption_ros2.py --ros2 --ros-args --params-file configs/florence2_caption_params.yaml
+python code/florence2_caption_ros2.py --ros2 --ros-args --params-file configs/florence2_caption_params.yaml
 ```
 
 预期输出：
@@ -215,7 +215,6 @@ python florence2_caption_ros2.py --ros2 --ros-args --params-file configs/florenc
 # 终端 2
 ros2 topic pub -1 /nav/arrival std_msgs/msg/String "{data: '操场'}"
 ros2 topic pub -1 /navigation/florence std_msgs/Int8 "data: 1"
-ros2 topic pub -1 /speech/ready std_msgs/msg/Bool "{data: true}""
 ```
 
 #### 步骤 3: 查看结果
@@ -297,7 +296,7 @@ florence2_control_node:
 
 使用配置文件启动：
 ```bash
-python florence2_caption_ros2.py --ros2 \
+python code/florence2_caption_ros2.py --ros2 \
     --ros-args --params-file configs/florence2_caption_params.yaml
 ```
 
@@ -332,7 +331,7 @@ python florence2_caption_ros2.py --ros2 \
 如果需要临时修改某些参数，可以在命令行中覆盖：
 
 ```bash
-python florence2_caption_ros2.py --ros2 \
+python code/florence2_caption_ros2.py --ros2 \
     --ros-args \
     --params-file configs/florence2_caption_params.yaml \
     -p image_source:=rtsp \

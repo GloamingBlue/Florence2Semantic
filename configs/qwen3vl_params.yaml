@@ -12,16 +12,13 @@ qwen3vl_control_node:
     # RTSP 视频流地址（仅在 image_source="rtsp" 时使用）
     rtsp_url: "rtsp://192.168.168.168:8554/test"
 
-    # 控制信号话题（支持两个话题，任一话题收到触发信号即可触发）：
-    #  - control_topic: std_msgs/msg/String，取值为"操场"时，开始场景解析
-    #  - control_topic_2: std_msgs/msg/Int8，取值为1时，开始场景解析
-    control_topic: "/nav/arrival"             # 控制信号话题 1 (String类型，触发词: "操场")
-    control_topic_2: "/navigation/florence"   # 控制信号话题 2 (Int8类型，期望值: 1，可选，如果与话题1相同则忽略)
-
-    # 发送准备接受结果的话题
-    #  - 期望类型: std_msgs/msg/Bool
-    #  - 取值为true时，表示准备接受结果
-    ready_topic: "/speech/ready"
+    # 控制信号话题：
+    #  - control_topic: std_msgs/msg/String，取值为"操场"时，开始场景解析（只缓存，不发送）
+    #  - control_topic_2: std_msgs/msg/Int8，取值为1时：
+    #      * 如果有缓存结果，直接发送缓存结果（不进行解析）
+    #      * 如果没有缓存结果，开始场景解析并在解析完成后发送结果
+    control_topic: "/nav/arrival"             # 控制信号话题 1 (String类型，触发词: "操场"，解析后缓存)
+    control_topic_2: "/navigation/florence"   # 控制信号话题 2 (Int8类型，期望值: 1，触发发送)
 
     # 模型相关配置
     # Qwen3-VL 模型路径（本地路径或 HuggingFace 模型 ID）
@@ -39,8 +36,8 @@ qwen3vl_control_node:
 
     # 文本生成相关参数
     max_new_tokens: 1024   # 最大生成 token 数
-    temperature: 0.7       # 采样温度（0.0-1.0，值越大越随机）
-    top_p: 0.8            # Nucleus sampling 参数（0.0-1.0）
+    temperature: 0.1       # 采样温度（0.0-1.0，值越大越随机）
+    top_p: 0.5            # Nucleus sampling 参数（0.0-1.0）
     do_sample: true       # 是否使用采样生成（true=采样，false=贪婪解码）
 
     # 模型加载相关参数
