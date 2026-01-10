@@ -13,23 +13,26 @@ qwen3vl_control_node:
     rtsp_url: "rtsp://192.168.168.168:8554/test"
 
     # 控制信号话题：
-    #  - control_topic: std_msgs/msg/String，取值为"操场"时，开始场景解析（只缓存，不发送）
-    #  - control_topic_2: std_msgs/msg/Int8，取值为1时：
+    #  - control_topic: std_msgs/msg/String，取值为"操场"时，开始场景解析（使用 caption_prompt，只缓存，不发送）
+    #  - control_topic_2: std_msgs/msg/Int8，取值为1或2时：
+    #      * 值为 1：使用 caption_prompt 进行解析
+    #      * 值为 2：使用 text_cap_prompt 进行解析
     #      * 如果有缓存结果，直接发送缓存结果（不进行解析）
     #      * 如果没有缓存结果，开始场景解析并在解析完成后发送结果
-    control_topic: "/nav/arrival"             # 控制信号话题 1 (String类型，触发词: "操场"，解析后缓存)
-    control_topic_2: "/navigation/florence"   # 控制信号话题 2 (Int8类型，期望值: 1，触发发送)
+    control_topic: "/nav/arrival"             # 控制信号话题 1 (String类型，触发词: "操场"，使用 caption_prompt 解析后缓存)
+    control_topic_2: "/navigation/florence"   # 控制信号话题 2 (Int8类型，期望值: 1=caption, 2=text_cap，触发发送)
 
     # 模型相关配置
     # Qwen3-VL 模型路径（本地路径或 HuggingFace 模型 ID）
     # 例如: "Qwen/Qwen3-VL-2B-Instruct" 或 "/path/to/local/model"
     model_path: "/home/ubun/robot/Florence2Semantic/models/qwen3-vl-2B-Instruct"
 
-    # 任务类型：
-    #  - caption           : 简要描述
-    #  - detailed_cap      : 详细描述
-    #  - more_detailed_cap : 更详细描述
-    task_type: "caption"
+    # 提示词模板配置
+    # 根据 control_topic_2 的值选择不同的 prompt：
+    #  - 值为 1 时使用 caption_prompt
+    #  - 值为 2 时使用 text_cap_prompt
+    caption_prompt: "要求：1) 使用纯文本，不要使用markdown格式、分隔符、换行符等特殊字符；2) 不要使用'照片'、'图片'、'视角'、'画面'、'这张'等词汇，直接描述场景本身；3) 用一段连贯的文字描述，不要分段；"
+    text_cap_prompt: "只描述显示器上的文字内容。要求：1)使用纯文本，不要使用markdown格式、分隔符、换行符等特殊字符；2)用一段连贯的文字对内容进行辅助说明"
 
     # 结果发布话题
     result_topic: "/florence2/caption"

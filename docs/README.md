@@ -78,6 +78,7 @@ python code/qwen3_caption_ros2.py --ros2 --ros-args --params-file configs/qwen3v
 # 3. 发送控制信号
 ros2 topic pub -1 /nav/arrival std_msgs/msg/String "{data: '操场'}"
 ros2 topic pub -1 /navigation/florence std_msgs/Int8 "data: 1"
+ros2 topic pub -1 /navigation/florence std_msgs/Int8 "data: 2"
 
 # 4. 查看结果
 ros2 topic echo -f /florence2/caption
@@ -100,6 +101,7 @@ python code/qwen3_caption_ros2.py --ros2 --ros-args --params-file configs/qwen3v
 # 2. 发送控制信号
 ros2 topic pub -1 /nav/arrival std_msgs/msg/String "{data: '操场'}"
 ros2 topic pub -1 /navigation/florence std_msgs/Int8 "data: 1"
+ros2 topic pub -1 /navigation/florence std_msgs/Int8 "data: 2"
 
 # 3. 查看结果
 ros2 topic echo -f /florence2/caption
