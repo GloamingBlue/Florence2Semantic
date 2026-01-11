@@ -214,6 +214,7 @@ python code/florence2_caption_ros2.py --ros2 --ros-args --params-file configs/fl
 ```bash
 # 终端 2
 ros2 topic pub -1 /nav/arrival std_msgs/msg/String "{data: '操场'}"
+ros2 topic pub -1 /nav/arrival std_msgs/msg/String "{data: '宣传栏'}"
 ros2 topic pub -1 /navigation/florence std_msgs/Int8 "data: 1"
 ros2 topic pub -1 /navigation/florence std_msgs/Int8 "data: 2"
 ```

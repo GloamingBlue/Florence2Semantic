@@ -10,6 +10,7 @@ import sys
 import argparse
 import threading
 import gc
+import time
 from pathlib import Path
 from unittest.mock import patch
 from typing import Union, Optional
@@ -249,6 +250,10 @@ class Qwen3VLControlNode(Node):
         self.cached_text_cap_result = None  # text_cap_prompt 的缓存结果
         self.cache_lock = threading.Lock()
         
+        # 等待发送标志（用于处理解析过程中收到发送信号的情况）
+        self.pending_send_caption = False  # caption 解析完成后是否需要发送
+        self.pending_send_text_cap = False  # text_cap 解析完成后是否需要发送
+        
         # RTSP 相关
         self.rtsp_cap = None
         self.rtsp_thread = None
@@ -284,7 +289,7 @@ class Qwen3VLControlNode(Node):
             self.control_callback,
             10  # QoS depth = 10，确保信号不丢失
         )
-        self.get_logger().info(f'🎮 已订阅控制信号话题 1: {control_topic} (String类型，触发词: "操场")')
+        self.get_logger().info(f'🎮 已订阅控制信号话题 1: {control_topic} (String类型，触发词: "操场"=caption, "宣传栏"=text_cap)')
         
         # 订阅第二个控制话题（如果配置了且与话题1不同）
         control_topic_2 = self.get_parameter('control_topic_2').value
@@ -379,32 +384,93 @@ class Qwen3VLControlNode(Node):
     def control_callback(self, msg: String):
         """
         控制信号回调函数 1
-        msg.data: 当接收到 "操场" 时，开始加载模型进行解析，但不发送结果（只缓存）
+        msg.data: 当接收到触发词时，开始加载模型进行解析，但不发送结果（只缓存）
+        - "操场": 使用 caption_prompt 解析并缓存到 cached_caption_result
+        - "宣传栏": 使用 text_cap_prompt 解析并缓存到 cached_text_cap_result
         """
         trigger_word = msg.data.strip()
         
-        if trigger_word != "操场":
-            # 不是触发词，跳过处理
-            self.get_logger().debug(f'收到控制信号: "{trigger_word}"，不是触发词 "操场"，跳过处理')
-            return
-        
-        # 收到 "操场"，按需加载模型并处理（只缓存，不发送）
-        # 使用默认的 caption_prompt 进行预解析
-        caption_prompt = self.get_parameter('caption_prompt').value
-        if not caption_prompt:
-            self.get_logger().error('❌ caption_prompt 未配置，无法处理')
-            return
-        
-        self.get_logger().info('收到控制信号 "操场": 开始处理图像（使用 caption_prompt 解析后缓存，等待 control_topic_2 发送）...')
-        
-        # 检查是否正在处理（避免重复处理）
-        with self.processing_lock:
-            if self.is_processing:
-                self.get_logger().warn('上一次处理尚未完成，跳过本次请求')
+        # 根据触发词选择对应的 prompt
+        if trigger_word == "操场":
+            prompt_type = "caption"
+            prompt_template = self.get_parameter('caption_prompt').value
+            cached_result_var = 'cached_caption_result'
+            if not prompt_template:
+                self.get_logger().error('❌ caption_prompt 未配置，无法处理')
                 return
-            self.is_processing = True
+        elif trigger_word == "宣传栏":
+            prompt_type = "text_cap"
+            prompt_template = self.get_parameter('text_cap_prompt').value
+            cached_result_var = 'cached_text_cap_result'
+            if not prompt_template:
+                self.get_logger().error('❌ text_cap_prompt 未配置，无法处理')
+                return
+        else:
+            # 不是触发词，跳过处理
+            self.get_logger().debug(f'收到控制信号: "{trigger_word}"，不是触发词 "操场" 或 "宣传栏"，跳过处理')
+            return
         
+        # 检查是否已有缓存结果，如果有就跳过解析
+        with self.cache_lock:
+            cached_result = getattr(self, cached_result_var)
+            if cached_result is not None:
+                self.get_logger().info(f'收到控制信号 "{trigger_word}": 检测到已有缓存结果，跳过解析（等待 control_topic_2 发送）')
+                return
+        
+        # 如果是 "宣传栏"，延迟 1 秒后再解析
+        if trigger_word == "宣传栏":
+            self.get_logger().info(f'收到控制信号 "{trigger_word}": 延迟 1 秒后开始处理图像（使用 {prompt_type}_prompt 解析后缓存，等待 control_topic_2 发送）...')
+            # 使用线程延迟执行，避免阻塞
+            def delayed_process():
+                time.sleep(1.0)
+                # 延迟后再次检查缓存和处理状态
+                with self.cache_lock:
+                    cached_result = getattr(self, cached_result_var)
+                    if cached_result is not None:
+                        self.get_logger().info(f'延迟期间检测到已有缓存结果，跳过解析')
+                        return
+                
+                with self.processing_lock:
+                    if self.is_processing:
+                        self.get_logger().warn('延迟期间检测到正在处理，跳过本次请求')
+                        return
+                    self.is_processing = True
+                
+                try:
+                    self._execute_processing(prompt_template, prompt_type, cached_result_var)
+                finally:
+                    with self.processing_lock:
+                        self.is_processing = False
+            
+            thread = threading.Thread(target=delayed_process, daemon=True)
+            thread.start()
+        else:
+            # "操场" 立即解析
+            # 检查是否正在处理（避免重复处理）
+            with self.processing_lock:
+                if self.is_processing:
+                    self.get_logger().warn('上一次处理尚未完成，跳过本次请求')
+                    return
+                self.is_processing = True
+            
+            self.get_logger().info(f'收到控制信号 "{trigger_word}": 开始处理图像（使用 {prompt_type}_prompt 解析后缓存，等待 control_topic_2 发送）...')
+            try:
+                self._execute_processing(prompt_template, prompt_type, cached_result_var)
+            finally:
+                with self.processing_lock:
+                    self.is_processing = False
+    
+    def _execute_processing(self, prompt_template: str, prompt_type: str, cached_result_var: str):
+        """
+        执行图像处理（内部方法，用于延迟执行）
+        
+        Args:
+            prompt_template: 提示词模板
+            prompt_type: prompt 类型（"caption" 或 "text_cap"）
+            cached_result_var: 缓存变量名
+        """
         try:
+            
             # 获取最新图像（根据图像源类型）
             image_source = self.get_parameter('image_source').value
             
@@ -415,7 +481,7 @@ class Qwen3VLControlNode(Node):
                         self.get_logger().warn('⚠️  尚未收到图像，无法处理')
                         return
                     image_msg = self.latest_image_msg
-                self._process_with_model(image_msg, send_result=False, prompt_template=caption_prompt)
+                self._process_with_model(image_msg, send_result=False, prompt_template=prompt_template)
             elif image_source == 'rtsp':
                 # RTSP 模式：从 RTSP 流获取图像
                 with self.latest_image_lock:
@@ -423,7 +489,7 @@ class Qwen3VLControlNode(Node):
                         self.get_logger().warn('⚠️  尚未收到 RTSP 帧，无法处理')
                         return
                     frame = self.latest_rtsp_frame.copy()
-                self._process_with_rtsp_frame(frame, send_result=False, prompt_template=caption_prompt)
+                self._process_with_rtsp_frame(frame, send_result=False, prompt_template=prompt_template)
             else:
                 self.get_logger().error(f'❌ 不支持的图像源类型: {image_source}')
                 return
@@ -432,9 +498,6 @@ class Qwen3VLControlNode(Node):
             self.get_logger().error(f'❌ 处理图像时出错: {e}')
             import traceback
             self.get_logger().error(traceback.format_exc())
-        finally:
-            with self.processing_lock:
-                self.is_processing = False
     
     def control_callback_2(self, msg: Int8):
         """
@@ -477,15 +540,20 @@ class Qwen3VLControlNode(Node):
                 print("\033[36m" + "─" * 80 + "\033[0m")
                 return
         
-        # 没有缓存结果，开始解析并在解析完成后发送
-        self.get_logger().info(f'收到控制信号 {signal} ({prompt_type}): 开始处理图像（解析完成后立即发送）...')
-        
-        # 检查是否正在处理（避免重复处理）
+        # 检查是否正在处理
         with self.processing_lock:
             if self.is_processing:
-                self.get_logger().warn('上一次处理尚未完成，跳过本次请求')
+                # 正在处理中，设置等待发送标志，让解析完成后自动发送
+                if signal == 1:
+                    self.pending_send_caption = True
+                else:  # signal == 2
+                    self.pending_send_text_cap = True
+                self.get_logger().info(f'收到控制信号 {signal} ({prompt_type}): 检测到正在解析中，已设置等待发送标志（解析完成后自动发送）')
                 return
             self.is_processing = True
+        
+        # 没有缓存结果且没有正在处理，开始解析并在解析完成后发送
+        self.get_logger().info(f'收到控制信号 {signal} ({prompt_type}): 开始处理图像（解析完成后立即发送）...')
         
         try:
             # 获取最新图像（根据图像源类型）
@@ -605,11 +673,18 @@ class Qwen3VLControlNode(Node):
             
             self.get_logger().info(f'✅ 生成描述: {caption}')
             
-            # 4. 根据 send_result 参数决定是发送还是缓存
+            # 4. 根据 send_result 参数和等待发送标志决定是发送还是缓存
             with self.cache_lock:
-                if send_result:
-                    # 立即发送结果
-                    self.get_logger().info('📤 解析完成，立即发送结果')
+                # 检查是否有等待发送标志
+                pending_send_var = 'pending_send_caption' if prompt_type == 'caption' else 'pending_send_text_cap'
+                pending_send = getattr(self, pending_send_var, False)
+                
+                if send_result or pending_send:
+                    # 立即发送结果（send_result=True 或 pending_send=True）
+                    if pending_send:
+                        self.get_logger().info(f'📤 解析完成，检测到等待发送标志，自动发送结果')
+                    else:
+                        self.get_logger().info('📤 解析完成，立即发送结果')
                     self._publish_caption(caption)
                     # 发送后清空对应缓存（确保不会重复使用）
                     setattr(self, cached_result_var, None)
@@ -617,6 +692,8 @@ class Qwen3VLControlNode(Node):
                     # 只缓存结果，不发送（根据 prompt_type 缓存到对应的变量）
                     self.get_logger().info(f'⏳ 解析完成，缓存结果到 {prompt_type} 缓存，等待 control_topic_2 信号发送...')
                     setattr(self, cached_result_var, caption)
+                setattr(self, 'pending_send_caption', False)  # 清除等待发送标志
+                setattr(self, 'pending_send_text_cap', False)  # 清除等待发送标志
             
         finally:
             # 5. 释放模型资源

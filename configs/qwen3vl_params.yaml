@@ -13,13 +13,15 @@ qwen3vl_control_node:
     rtsp_url: "rtsp://192.168.168.168:8554/test"
 
     # 控制信号话题：
-    #  - control_topic: std_msgs/msg/String，取值为"操场"时，开始场景解析（使用 caption_prompt，只缓存，不发送）
+    #  - control_topic: std_msgs/msg/String，取值为触发词时，开始场景解析（只缓存，不发送）
+    #      * "操场": 使用 caption_prompt 解析并缓存到 cached_caption_result
+    #      * "宣传栏": 使用 text_cap_prompt 解析并缓存到 cached_text_cap_result
     #  - control_topic_2: std_msgs/msg/Int8，取值为1或2时：
-    #      * 值为 1：使用 caption_prompt 进行解析
-    #      * 值为 2：使用 text_cap_prompt 进行解析
-    #      * 如果有缓存结果，直接发送缓存结果（不进行解析）
+    #      * 值为 1：使用 caption_prompt 进行解析（或发送 cached_caption_result 缓存）
+    #      * 值为 2：使用 text_cap_prompt 进行解析（或发送 cached_text_cap_result 缓存）
+    #      * 如果有对应缓存结果，直接发送缓存结果（不进行解析）
     #      * 如果没有缓存结果，开始场景解析并在解析完成后发送结果
-    control_topic: "/nav/arrival"             # 控制信号话题 1 (String类型，触发词: "操场"，使用 caption_prompt 解析后缓存)
+    control_topic: "/nav/arrival"             # 控制信号话题 1 (String类型，触发词: "操场"=caption, "宣传栏"=text_cap，解析后缓存)
     control_topic_2: "/navigation/florence"   # 控制信号话题 2 (Int8类型，期望值: 1=caption, 2=text_cap，触发发送)
 
     # 模型相关配置
