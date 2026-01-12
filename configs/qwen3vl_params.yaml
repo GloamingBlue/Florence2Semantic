@@ -27,7 +27,7 @@ qwen3vl_control_node:
     # 模型相关配置
     # Qwen3-VL 模型路径（本地路径或 HuggingFace 模型 ID）
     # 例如: "Qwen/Qwen3-VL-2B-Instruct" 或 "/path/to/local/model"
-    model_path: "/home/ubun/robot/Florence2Semantic/models/qwen3-vl-2B-Instruct"
+    model_path: "~/robot/Florence2Semantic/models/qwen3-vl-2B-Instruct"
 
     # 提示词模板配置
     # 根据 control_topic_2 的值选择不同的 prompt：

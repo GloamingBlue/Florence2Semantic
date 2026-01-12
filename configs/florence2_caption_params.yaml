@@ -22,7 +22,7 @@ florence2_control_node:
 
     # 模型相关配置
     # Florence2 本地模型路径（或 HuggingFace 模型 ID）
-    model_path: "/home/ubun/robot/Florence2Semantic/models/florence"
+    model_path: "~/robot/Florence2Semantic/models/florence"
 
     # 任务类型：
     #  - caption           : 简要描述

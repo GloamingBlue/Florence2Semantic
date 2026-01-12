@@ -10,6 +10,7 @@ import sys
 import argparse
 import threading
 import gc
+import os
 from pathlib import Path
 from unittest.mock import patch
 from typing import Union, Optional
@@ -83,6 +84,14 @@ class Florence2Caption:
         self.do_sample = do_sample
         self.num_beams = num_beams
 
+        # 展开路径中的 ~ 符号为绝对路径
+        # HuggingFace 库无法识别包含 ~ 的路径，需要展开
+        if '~' in model_path:
+            model_path = os.path.expanduser(model_path)
+            # 展开后如果是相对路径，转换为绝对路径
+            if not os.path.isabs(model_path):
+                model_path = os.path.abspath(model_path)
+
         # 自动选择设备
         self.device = "cuda:0" if torch.cuda.is_available() else "cpu"
         self.torch_dtype = (
@@ -141,21 +150,29 @@ class Florence2Caption:
         
         if enable and self.translator is None:
             # 优先使用本地路径
-            if model_path and Path(model_path).exists():
-                print(f"🔄 正在从本地路径加载翻译模型: {model_path}")
-                try:
-                    self.translator_tokenizer = MarianTokenizer.from_pretrained(model_path)
-                    self.translator_model = MarianMTModel.from_pretrained(model_path)
-                    if torch.cuda.is_available():
-                        self.translator_model = self.translator_model.to(self.device)
-                    print(f"✅ 翻译模型加载完成（本地路径）")
-                except Exception as e:
-                    print(f"⚠️  从本地路径加载翻译模型失败: {e}")
-                    self.translate_to_chinese = False
-            elif model_path:
-                print(f"⚠️  本地翻译模型路径不存在: {model_path}，将使用 HuggingFace 模型")
-                # 回退到 HuggingFace 模型
-                model_path = None
+            if model_path:
+                # 展开路径中的 ~ 符号为绝对路径
+                if '~' in model_path:
+                    model_path = os.path.expanduser(model_path)
+                    # 展开后如果是相对路径，转换为绝对路径
+                    if not os.path.isabs(model_path):
+                        model_path = os.path.abspath(model_path)
+                
+                if Path(model_path).exists():
+                    print(f"🔄 正在从本地路径加载翻译模型: {model_path}")
+                    try:
+                        self.translator_tokenizer = MarianTokenizer.from_pretrained(model_path)
+                        self.translator_model = MarianMTModel.from_pretrained(model_path)
+                        if torch.cuda.is_available():
+                            self.translator_model = self.translator_model.to(self.device)
+                        print(f"✅ 翻译模型加载完成（本地路径）")
+                    except Exception as e:
+                        print(f"⚠️  从本地路径加载翻译模型失败: {e}")
+                        self.translate_to_chinese = False
+                else:
+                    print(f"⚠️  本地翻译模型路径不存在: {model_path}，将使用 HuggingFace 模型")
+                    # 回退到 HuggingFace 模型
+                    model_path = None
             
             if enable and model_path is None:
                 print(f"🔄 正在从 HuggingFace 加载翻译模型: {model_name}")

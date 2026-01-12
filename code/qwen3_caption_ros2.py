@@ -11,6 +11,7 @@ import argparse
 import threading
 import gc
 import time
+import os
 from pathlib import Path
 from unittest.mock import patch
 from typing import Union, Optional
@@ -69,6 +70,14 @@ class Qwen3VLCaption:
         self.temperature = temperature
         self.top_p = top_p
         self.do_sample = do_sample
+
+        # 展开路径中的 ~ 符号为绝对路径
+        # HuggingFace 库无法识别包含 ~ 的路径，需要展开
+        if '~' in model_path:
+            model_path = os.path.expanduser(model_path)
+            # 展开后如果是相对路径，转换为绝对路径
+            if not os.path.isabs(model_path):
+                model_path = os.path.abspath(model_path)
 
         # 自动选择设备
         self.device = "cuda:0" if torch.cuda.is_available() else "cpu"
