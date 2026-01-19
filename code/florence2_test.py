@@ -14,15 +14,10 @@ from typing import Dict, Tuple, Union
 
 warnings.filterwarnings("ignore")
 
-try:
-    import torch
-    from PIL import Image
-    from transformers import AutoModelForCausalLM, AutoProcessor
-    from transformers.dynamic_module_utils import get_imports
-except ImportError as e:
-    print(f"❌ 缺少必要的依赖包: {e}")
-    print("请安装: pip install torch transformers pillow")
-    sys.exit(1)
+import torch
+from PIL import Image
+from transformers import AutoModelForCausalLM, AutoProcessor
+from transformers.dynamic_module_utils import get_imports
 
 # 尝试导入 psutil 用于内存监控
 try:
@@ -506,4 +501,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

@@ -391,24 +391,42 @@ class Qwen3VLControlNode(Node):
         if not lines:
             return text
         title = lines[0]
-        tokens = [
-            line
-            for line in lines[1:]
-            if line not in ("日期", "考试科目", "考试时间")
-        ]
         clauses = []
-        i = 0
-        while i + 2 < len(tokens):
-            date_token = tokens[i]
-            subject = tokens[i + 1]
-            time_token = tokens[i + 2]
-            match = re.search(r"(\d{1,2})\.(\d{1,2})", date_token)
-            if match:
-                month = self._number_to_cn(int(match.group(1)))
-                day = self._number_to_cn(int(match.group(2)))
-                time_range = self._time_range_to_cn(time_token)
-                clauses.append(f"{month}月{day}日考试科目为{subject}，考试时间{time_range}")
-            i += 3
+        rows = []
+        for line in lines[1:]:
+            if line in {"日期", "考试科目", "考试时间", "日期 考试科目 考试时间"}:
+                continue
+            parts = line.split()
+            if len(parts) == 3:
+                rows.append(tuple(parts))
+                continue
+            rows.append((line, "", ""))
+        if rows and all(r[1] for r in rows):
+            for date_token, subject, time_token in rows:
+                match = re.search(r"(\d{1,2})\.(\d{1,2})", date_token)
+                if match:
+                    month = self._number_to_cn(int(match.group(1)))
+                    day = self._number_to_cn(int(match.group(2)))
+                    time_range = self._time_range_to_cn(time_token)
+                    clauses.append(f"{month}月{day}日考试科目为{subject}，考试时间{time_range}")
+        else:
+            tokens = [
+                line
+                for line in lines[1:]
+                if line not in {"日期", "考试科目", "考试时间"}
+            ]
+            i = 0
+            while i + 2 < len(tokens):
+                date_token = tokens[i]
+                subject = tokens[i + 1]
+                time_token = tokens[i + 2]
+                match = re.search(r"(\d{1,2})\.(\d{1,2})", date_token)
+                if match:
+                    month = self._number_to_cn(int(match.group(1)))
+                    day = self._number_to_cn(int(match.group(2)))
+                    time_range = self._time_range_to_cn(time_token)
+                    clauses.append(f"{month}月{day}日考试科目为{subject}，考试时间{time_range}")
+                i += 3
         if not clauses:
             return title
         return f"这是{title}，" + "，".join(clauses)
