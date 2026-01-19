@@ -12,6 +12,7 @@ import threading
 import gc
 import time
 import os
+import re
 from pathlib import Path
 from unittest.mock import patch
 from typing import Union, Optional
@@ -241,6 +242,7 @@ class Qwen3VLControlNode(Node):
         self.declare_parameter('do_sample', True)  # 是否使用采样生成
         self.declare_parameter('trust_remote_code', True)  # 是否信任远程代码
         self.declare_parameter('flip', False)  # 是否在语义生成前将图像旋转180度
+        self.declare_parameter('enable_text_cap_postprocess', False)  # 是否对 text_cap 输出进行后处理
         
         # 获取图像源类型
         image_source = self.get_parameter('image_source').value
@@ -326,6 +328,90 @@ class Qwen3VLControlNode(Node):
         
         self.get_logger().info('✅ Qwen3-VL Control Node 初始化完成（模型未加载）')
         self.get_logger().info('⏳ 等待控制信号...')
+
+    @staticmethod
+    def _number_to_cn(num: int) -> str:
+        mapping = {
+            0: "零",
+            1: "一",
+            2: "二",
+            3: "三",
+            4: "四",
+            5: "五",
+            6: "六",
+            7: "七",
+            8: "八",
+            9: "九",
+            10: "十",
+            11: "十一",
+            12: "十二",
+            13: "十三",
+            14: "十四",
+            15: "十五",
+            16: "十六",
+            17: "十七",
+            18: "十八",
+            19: "十九",
+            20: "二十",
+            21: "二十一",
+            22: "二十二",
+            23: "二十三",
+            24: "二十四",
+            25: "二十五",
+            26: "二十六",
+            27: "二十七",
+            28: "二十八",
+            29: "二十九",
+            30: "三十",
+            31: "三十一",
+        }
+        return mapping.get(num, str(num))
+
+    def _time_range_to_cn(self, time_range: str) -> str:
+        normalized = time_range.replace("：", ":")
+        if "-" not in normalized:
+            return time_range
+        start, end = normalized.split("-", 1)
+
+        def format_time(part: str) -> str:
+            if ":" not in part:
+                return f"{self._number_to_cn(int(part))}点"
+            hour_str, minute_str = part.split(":", 1)
+            hour = self._number_to_cn(int(hour_str))
+            minute = int(minute_str)
+            if minute == 0:
+                return f"{hour}点"
+            return f"{hour}点{self._number_to_cn(minute)}分"
+
+        return f"{format_time(start)}到{format_time(end)}"
+
+    def _post_process_text_cap(self, text: str) -> str:
+        text = re.sub(r"[A-Za-z]+", "", text)
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        if not lines:
+            return text
+        title = lines[0]
+        tokens = [
+            line
+            for line in lines[1:]
+            if line not in ("日期", "考试科目", "考试时间")
+        ]
+        clauses = []
+        i = 0
+        while i + 2 < len(tokens):
+            date_token = tokens[i]
+            subject = tokens[i + 1]
+            time_token = tokens[i + 2]
+            match = re.search(r"(\d{1,2})\.(\d{1,2})", date_token)
+            if match:
+                month = self._number_to_cn(int(match.group(1)))
+                day = self._number_to_cn(int(match.group(2)))
+                time_range = self._time_range_to_cn(time_token)
+                clauses.append(f"{month}月{day}日考试科目为{subject}，考试时间{time_range}")
+            i += 3
+        if not clauses:
+            return title
+        return f"这是{title}，" + "，".join(clauses)
     
     def image_callback(self, msg: ROSImage):
         """
@@ -679,6 +765,9 @@ class Qwen3VLControlNode(Node):
             
             # 3. 生成描述
             caption = caption_generator.generate_caption(pil_image)
+
+            if prompt_type == "text_cap" and self.get_parameter('enable_text_cap_postprocess').value:
+                caption = self._post_process_text_cap(caption)
             
             self.get_logger().info(f'✅ 生成描述: {caption}')
             
@@ -913,4 +1002,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

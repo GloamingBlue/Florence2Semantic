@@ -34,7 +34,8 @@ qwen3vl_control_node:
     #  - 值为 1 时使用 caption_prompt
     #  - 值为 2 时使用 text_cap_prompt
     caption_prompt: "要求：1) 使用纯文本，不要使用markdown格式、分隔符、换行符等特殊字符；2) 不要使用'照片'、'图片'、'视角'、'画面'、'这张'等词汇，直接描述场景本身；3) 用一段连贯的文字描述，不要分段；"
-    text_cap_prompt: "只描述显示器上的文字内容。要求：1)使用纯文本，不要使用markdown格式、分隔符、换行符等特殊字符；2)用一段连贯的文字对内容进行辅助说明"
+    text_cap_prompt: "只识别显示器上的文字内容。要求：1)使用纯文本，不要使用markdown格式、分隔符等特殊字符"
+    enable_text_cap_postprocess: true
 
     # 结果发布话题
     result_topic: "/florence2/caption"
@@ -51,4 +52,3 @@ qwen3vl_control_node:
     # 图像处理相关配置
     # 是否在语义生成前将图像旋转180度，如果使用ros2模式，则需要设置为true，如果使用rtsp模式，则需要设置为false。因为安装的realsense摄像头是倒置的，而狗自带的相机是正置的。
     flip: false
-
